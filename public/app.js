@@ -93,8 +93,18 @@ function showPane(name){
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('pane-'+name).classList.add('active');
   document.querySelector('.nav-item[data-pane="'+name+'"]').classList.add('active');
+  document.querySelector('.main')?.scrollTo(0,0);
+  if(window.innerWidth<=820) toggleSidebar(false);
 }
 
+function toggleSidebar(force){
+  const sb = document.getElementById('appSidebar');
+  const ov = document.getElementById('sidebarOverlay');
+  if(!sb) return;
+  const open = typeof force==='boolean' ? force : !sb.classList.contains('open');
+  sb.classList.toggle('open', open);
+  ov?.classList.toggle('show', open);
+}
 // ---------------------------------------------------------------
 // DATA LOADING
 // ---------------------------------------------------------------
@@ -2452,29 +2462,83 @@ async function saveProductRow(pid){
 // ---------------------------------------------------------------
 // SUPPLIERS
 // ---------------------------------------------------------------
+function refreshSuppliers(){ loadSuppliers().then(()=>{ fillSupplierSelect(); renderSuppliers(); }); }
+
 async function submitSupplier(){
   const err = document.getElementById('nsError'); err.textContent='';
   if(!canEdit()){ err.textContent='У вас нет прав на эту операцию.'; return; }
+  const editId = document.getElementById('ns-edit-id').value;
   const name = document.getElementById('ns-name').value.trim();
   const contact = document.getElementById('ns-contact').value.trim();
   const phone = document.getElementById('ns-phone').value.trim();
   const email = document.getElementById('ns-email').value.trim();
+  const notes = document.getElementById('ns-notes').value.trim();
   if(!name){ err.textContent='Укажите название.'; return; }
 
-  const { error } = await sb.from('suppliers').insert({ name, contact, phone, email });
-  if(error){ err.textContent = error.message; return; }
-  toast('Поставщик добавлен ✓');
-  ['ns-name','ns-contact','ns-phone','ns-email'].forEach(id=>document.getElementById(id).value='');
+  if(editId){
+    const { error } = await sb.from('suppliers').update({ name, contact, phone, email, notes }).eq('id', editId);
+    if(error){ err.textContent = error.message; return; }
+    toast('Поставщик обновлён ✓');
+  } else {
+    const { error } = await sb.from('suppliers').insert({ name, contact, phone, email, notes });
+    if(error){ err.textContent = error.message; return; }
+    toast('Поставщик добавлен ✓');
+  }
+  clearSupplierForm();
+  await loadSuppliers(); fillSupplierSelect(); renderSuppliers();
+}
+
+function editSupplier(id){
+  const s = suppliers.find(x=>x.id===id);
+  if(!s) return;
+  document.getElementById('ns-edit-id').value = s.id;
+  document.getElementById('ns-name').value = s.name||'';
+  document.getElementById('ns-contact').value = s.contact||'';
+  document.getElementById('ns-phone').value = s.phone||'';
+  document.getElementById('ns-email').value = s.email||'';
+  document.getElementById('ns-notes').value = s.notes||'';
+  document.getElementById('supplierFormTitle').textContent = 'Edit: '+s.name;
+  document.getElementById('supplierSubmitBtn').innerHTML = '💾 Save changes';
+  document.getElementById('pane-suppliers').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function clearSupplierForm(){
+  document.getElementById('ns-edit-id').value = '';
+  ['ns-name','ns-contact','ns-phone','ns-email','ns-notes'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('supplierFormTitle').textContent = 'Add supplier';
+  document.getElementById('supplierSubmitBtn').innerHTML = '＋ Add supplier';
+}
+
+async function deleteSupplier(id){
+  if(!confirm('Удалить этого поставщика?')) return;
+  const { error } = await sb.from('suppliers').delete().eq('id', id);
+  if(error){ toast(error.message, true); return; }
+  toast('Поставщик удалён ✓');
   await loadSuppliers(); fillSupplierSelect(); renderSuppliers();
 }
 
 function renderSuppliers(){
   const search = (document.getElementById('suppliersSearch')?.value||'').toLowerCase();
-  const tbody = document.querySelector('#suppliersTable tbody');
+  const wrap = document.getElementById('supplierList');
   let rows = suppliers;
   if(search) rows = rows.filter(s=> s.name.toLowerCase().includes(search) || (s.contact||'').toLowerCase().includes(search) || (s.phone||'').toLowerCase().includes(search) || (s.email||'').toLowerCase().includes(search));
-  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="4" class="empty">Ничего не найдено</td></tr>'; return; }
-  tbody.innerHTML = rows.map(s=>`<tr>
-    <td>${s.name}</td><td>${s.contact||'—'}</td><td>${s.phone||'—'}</td><td>${s.email||'—'}</td>
-  </tr>`).join('');
+  if(!rows.length){ wrap.innerHTML = '<div class="empty">Ничего не найдено</div>'; return; }
+  wrap.innerHTML = rows.map(s=>{
+    const metaParts = [
+      s.contact ? `👤 ${s.contact}` : '',
+      s.phone ? `📞 ${s.phone}` : '',
+      s.email ? `✉️ ${s.email}` : ''
+    ].filter(Boolean).join(' · ');
+    return `<div class="supplier-card">
+      <div class="supplier-icon">🏭</div>
+      <div style="flex:1;min-width:0">
+        <div class="supplier-name">${s.name}</div>
+        <div class="supplier-meta">${metaParts || '—'}${s.notes?`<div style="margin-top:2px;font-style:italic">${s.notes}</div>`:''}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn-edit" onclick="editSupplier(${s.id})">✏️ Edit</button>
+        <button class="btn-icon" onclick="deleteSupplier(${s.id})" title="Удалить">✕</button>
+      </div>
+    </div>`;
+  }).join('');
 }
