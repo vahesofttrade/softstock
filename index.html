@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SoftStock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<!-- ===================== AUTH SCREEN ===================== -->
+<div id="authScreen" class="auth-wrap">
+  <div class="auth-card">
+    <div class="auth-logo">Soft<span>Stock</span></div>
+    <div class="auth-sub" id="authSub">Войдите, чтобы продолжить</div>
+
+    <form id="signInForm">
+      <div class="form-row"><label>Email</label><input type="email" id="si-email" required></div>
+      <div class="form-row"><label>Пароль</label><input type="password" id="si-password" required></div>
+      <button class="btn btn-brand" style="width:100%;justify-content:center" type="submit">Войти</button>
+      <div class="auth-error" id="siError"></div>
+    </form>
+
+    <form id="signUpForm" class="hidden">
+      <div class="form-row"><label>Имя</label><input type="text" id="su-name" required></div>
+      <div class="form-row"><label>Email</label><input type="email" id="su-email" required></div>
+      <div class="form-row"><label>Пароль (мин. 6 символов)</label><input type="password" id="su-password" minlength="6" required></div>
+      <button class="btn btn-brand" style="width:100%;justify-content:center" type="submit">Создать аккаунт</button>
+      <div class="auth-error" id="suError"></div>
+    </form>
+
+    <div class="auth-toggle">
+      <span id="toggleToSignUp">Нет аккаунта? <a href="#" onclick="showAuthForm('signup');return false;">Зарегистрироваться</a></span>
+      <span id="toggleToSignIn" class="hidden">Уже есть аккаунт? <a href="#" onclick="showAuthForm('signin');return false;">Войти</a></span>
+    </div>
+  </div>
+</div>
+
+<!-- ===================== MAIN APP ===================== -->
+<div id="app" class="hidden">
+  <div class="sidebar">
+    <div class="brand">Soft<span>Stock</span></div>
+
+    <div class="nav-group-label">Обзор</div>
+    <div class="nav-item active" data-pane="dashboard" onclick="showPane('dashboard')"><span class="nav-icon">◆</span>Dashboard</div>
+
+    <div class="nav-group-label">Операции</div>
+    <div class="nav-item" data-pane="entry" onclick="showPane('entry')"><span class="nav-icon">＋</span>Stock Entry</div>
+    <div class="nav-item" data-pane="levels" onclick="showPane('levels')"><span class="nav-icon">▤</span>Stock Levels</div>
+    <div class="nav-item" data-pane="history" onclick="showPane('history')"><span class="nav-icon">↺</span>History</div>
+
+    <div class="nav-group-label">Аналитика</div>
+    <div class="nav-item" data-pane="forecast" onclick="showPane('forecast')"><span class="nav-icon">◷</span>Forecast</div>
+    <div class="nav-item" data-pane="orders" onclick="showPane('orders')"><span class="nav-icon">▣</span>Orders</div>
+    <div class="nav-item" data-pane="deliveries" onclick="showPane('deliveries')"><span class="nav-icon">▽</span>Deliveries</div>
+
+    <div class="nav-group-label">Управление</div>
+    <div class="nav-item" data-pane="products" onclick="showPane('products')"><span class="nav-icon">⚙</span>Products</div>
+    <div class="nav-item" data-pane="reservations" onclick="showPane('reservations')"><span class="nav-icon">📌</span>Reservations</div>
+    <div class="nav-item" data-pane="scanner" onclick="showPane('scanner')"><span class="nav-icon">📷</span>Scanner</div>
+    <div class="nav-item" data-pane="suppliers" onclick="showPane('suppliers')"><span class="nav-icon">⌂</span>Suppliers</div>
+
+    <div class="sidebar-footer">
+      <div class="who">Вы: <b id="whoName">—</b><br><span id="whoRole" style="opacity:.8"></span></div>
+      <button class="signout" onclick="signOut()">Выйти →</button>
+    </div>
+  </div>
+
+  <div class="main">
+
+    <!-- DASHBOARD -->
+    <div class="pane active" id="pane-dashboard">
+      <div class="page-header">
+        <h1 class="page-title">Dashboard</h1>
+        <p class="page-sub" id="dashDateSub">—</p>
+      </div>
+
+      <div class="grid grid-4" style="margin-bottom:16px">
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('today')" title="Разбить по типам и товарам"><div class="card-title">Сегодня</div><div class="stat-num num" id="kpiToday">—</div><div class="stat-sub" id="kpiTodaySub">расход, м · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('avgDaily')" title="Разбить по типам и товарам"><div class="card-title">Средний расход/день</div><div class="stat-num num" id="kpiAvgDaily">—</div><div class="stat-sub">за 30 дней, все типы · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('mtd')" title="Разбить по типам и товарам"><div class="card-title">Расход с начала месяца</div><div class="stat-num num" id="kpiMtdUsage">—</div><div class="stat-sub" id="kpiMtdSub">м · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('lastMonth')" title="Разбить по типам и товарам"><div class="card-title">Итог за прошлый месяц</div><div class="stat-num num" id="kpiLastMonth">—</div><div class="stat-sub">м · по типам ›</div></div>
+      </div>
+
+      <div class="grid grid-2" style="align-items:start;margin-bottom:16px">
+        <div class="card" id="ceCard">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;margin-bottom:8px">
+            <div>
+              <div class="card-title" id="ceTitle">📊 Средний расход/день по типам</div>
+              <div id="ceBreadcrumb" style="font-size:11px;color:var(--text-3);margin-top:2px">Нажмите на столбец, чтобы открыть товары этого типа</div>
+            </div>
+            <button id="ceBack" class="btn btn-ghost btn-sm hidden" onclick="ceBack()">← Назад</button>
+          </div>
+          <div id="ceChartWrap" style="height:260px"><canvas id="chartByType"></canvas></div>
+        </div>
+        <div class="card">
+          <div class="card-title" style="margin-bottom:8px">🏆 Топ-10 товаров за 30 дней</div>
+          <div id="dashTop10" style="max-height:280px;overflow-y:auto"></div>
+        </div>
+      </div>
+
+      <div class="card" style="margin-bottom:16px">
+        <div class="card-title" style="margin-bottom:8px">📈 Дневной расход, последние 30 дней</div>
+        <div style="height:220px"><canvas id="chartDaily"></canvas></div>
+      </div>
+
+      <div style="margin-bottom:8px" class="card-title">🗓 Помесячная сводка</div>
+      <div id="dashMonthly" class="grid" style="grid-template-columns:repeat(6,1fr);margin-bottom:10px"></div>
+      <div id="dashMonthlyDetail" class="card hidden" style="margin-bottom:16px"></div>
+      <p style="font-size:12px;color:var(--text-3);margin:-10px 0 16px">Данные за январь–апрель могут быть неполными — эта история ещё не перенесена из старой базы.</p>
+
+      <div class="card-title" style="margin-bottom:8px">🔎 Детально: топ расхода (30 дней)</div>
+      <div class="card" style="padding:0;overflow-x:auto;margin-bottom:16px">
+        <table id="dashDetailTable"><thead><tr><th>Товар</th><th>Тип</th><th>30д</th><th>Пред. 30д</th><th>Δ</th><th>Расход/день</th></tr></thead><tbody></tbody></table>
+      </div>
+
+      <div class="card-title" style="margin-bottom:8px">🕐 Недавно обновлённые</div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="dashRecentTable"><thead><tr><th>Товар</th><th>Тип</th><th>Остаток</th><th>Расход/день</th><th>Обновлено</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <!-- STOCK ENTRY -->
+    <div class="pane" id="pane-entry">
+      <div class="page-header"><h1 class="page-title">Stock Entry</h1><p class="page-sub">Приход, расход или корректировка остатка</p></div>
+      <div class="card" style="max-width:460px">
+        <div class="form-row">
+          <label>Товар</label>
+          <select id="se-product"></select>
+        </div>
+        <div class="form-row">
+          <label>Операция</label>
+          <select id="se-operation">
+            <option value="add">Приход (+)</option>
+            <option value="deduct">Расход (−)</option>
+            <option value="update">Установить остаток (=)</option>
+          </select>
+        </div>
+        <div class="form-grid">
+          <div class="form-row"><label>Количество (м)</label><input type="number" id="se-qty" step="0.1" min="0"></div>
+          <div class="form-row"><label>Дата</label><input type="date" id="se-date"></div>
+        </div>
+        <div class="form-row"><label>Примечание</label><input type="text" id="se-note" placeholder="необязательно"></div>
+        <div class="btn-row">
+          <button class="btn btn-brand" onclick="submitStockEntry()">Сохранить</button>
+        </div>
+        <div class="auth-error" id="seError"></div>
+      </div>
+    </div>
+
+    <!-- STOCK LEVELS -->
+    <div class="pane" id="pane-levels">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div><h1 class="page-title">Stock Levels</h1><p class="page-sub">Остаток, расход/день и дней до конца</p></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <div style="display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 10px">
+            <span style="font-size:11px;color:var(--text-2)">📅 На дату</span>
+            <input type="date" id="lvlAsOf" onchange="onLvlAsOfChange()" style="border:none;background:transparent;font-size:13px;font-family:inherit;outline:none">
+            <button class="btn btn-ghost btn-sm" onclick="resetLvlAsOf()">Сегодня</button>
+          </div>
+          <div class="pill-row" style="margin:0">
+            <span class="pill" id="lvlRateWeighted" onclick="setLvlRate('weighted')">📊 Взвеш.</span>
+            <span class="pill" id="lvlRateManual" onclick="setLvlRate('manual')">✏️ Ручная</span>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="lvlHideZeroBtn" onclick="toggleLvlHideZero()">🚫 Скрыть нулевые</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportLevelsCsv()">📊 Excel (CSV)</button>
+          <button class="btn btn-ghost btn-sm" onclick="window.print()">🖨 PDF</button>
+          <button class="btn btn-ghost btn-sm" onclick="refreshLevels()">↻</button>
+        </div>
+      </div>
+
+      <div class="pill-row" id="levelsTypeFilter"></div>
+      <div class="pill-row" id="levelsPriorityFilter" style="margin-top:-6px"></div>
+
+      <div class="grid grid-4" style="margin-bottom:14px">
+        <div class="card" style="cursor:pointer" onclick="setLvlSummaryFilter('all')"><div class="card-title">Всего на складе</div><div class="stat-num num" id="lvlTotalStock">—</div><div class="stat-sub" id="lvlTotalSub">SKU · сброс фильтра</div></div>
+        <div class="card" style="cursor:pointer" onclick="setLvlSummaryFilter('zero')"><div class="card-title">Нулевой остаток</div><div class="stat-num num" id="lvlZeroCount" style="color:var(--red)">—</div><div class="stat-sub">показать</div></div>
+        <div class="card" style="cursor:pointer" onclick="setLvlSummaryFilter('low')"><div class="card-title">Мало (&lt;1000м)</div><div class="stat-num num" id="lvlLowCount" style="color:var(--amber)">—</div><div class="stat-sub">показать</div></div>
+        <div class="card" style="cursor:pointer" onclick="setLvlSummaryFilter('healthy')"><div class="card-title">В норме (1000м+)</div><div class="stat-num num" id="lvlHealthyCount" style="color:var(--green)">—</div><div class="stat-sub">показать</div></div>
+      </div>
+
+      <div style="margin-bottom:8px" class="card-title">📦 Запас по типам — сегодня</div>
+      <div id="lvlTypeCards" class="grid" style="grid-template-columns:repeat(7,1fr);margin-bottom:14px"></div>
+
+      <div id="lvlPendingBanner" class="hidden" style="margin-bottom:12px;padding:10px 16px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);font-size:13px;color:var(--brand-dark)"></div>
+
+      <div style="margin-bottom:10px"><input id="lvlSearch" placeholder="🔍 Поиск..." oninput="renderLevels()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
+
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="levelsTable">
+          <thead><tr>
+            <th onclick="setLvlSort('name')" style="cursor:pointer">Товар</th>
+            <th onclick="setLvlSort('type')" style="cursor:pointer">Тип</th>
+            <th onclick="setLvlSort('width')" style="cursor:pointer">Ширина</th>
+            <th>Ply</th><th>GSM</th>
+            <th onclick="setLvlSort('balance')" style="cursor:pointer">Остаток (м)</th>
+            <th style="color:var(--brand)">Ожидается</th>
+            <th onclick="setLvlSort('u30')" style="cursor:pointer">30д</th>
+            <th onclick="setLvlSort('daily')" style="cursor:pointer">Расход/день</th>
+            <th onclick="setLvlSort('days')" style="cursor:pointer">Дней</th>
+            <th>Уровень</th>
+          </tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+
+    <style media="print">
+      .sidebar, .page-header > div:last-child, #lvlSearch, .pill-row, #lvlPendingBanner { display:none !important; }
+      body { background:#fff }
+    </style>
+
+    <!-- HISTORY -->
+    <div class="pane" id="pane-history">
+      <div class="page-header"><h1 class="page-title">History</h1><p class="page-sub">Последние 60 операций</p></div>
+      <div style="margin-bottom:10px"><input id="historySearch" placeholder="🔍 Поиск..." oninput="renderHistory()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="historyTable"><thead><tr><th>Дата</th><th>Товар</th><th>Операция</th><th>Кол-во (м)</th><th>Примечание</th><th>Пользователь</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <!-- FORECAST -->
+    <div class="pane" id="pane-forecast">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div><h1 class="page-title">Forecast</h1><p class="page-sub">Прогноз окончания запасов по среднему расходу</p></div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <div class="method-toggle">
+            <span class="toggle-label" id="fcLblWeighted" style="color:var(--brand);font-weight:700">📊 Взвеш.</span>
+            <label class="switch"><input type="checkbox" id="forecastMethodToggle" onchange="onForecastMethodChange()"><span class="slider-toggle"></span></label>
+            <span class="toggle-label" id="fcLblManual">✏️ Ручная</span>
+          </div>
+          <input id="forecastSearch" placeholder="🔍 Поиск..." oninput="renderForecast()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:200px">
+          <button class="btn btn-ghost btn-sm" onclick="renderForecast()">↻</button>
+        </div>
+      </div>
+
+      <div id="forecastMethodBanner" style="margin-bottom:14px;padding:10px 16px;background:#EFF6FF;border:1px solid #93c5fd;border-radius:var(--radius-sm);font-size:12px;color:#1d4ed8;display:flex;align-items:center;gap:8px"><span>📊</span><span id="forecastMethodDesc">Используется <b>взвешенное среднее</b> (70% посл. 30д + 30% за всё время).</span></div>
+
+      <div class="avg-grid" id="forecastSummary"></div>
+
+      <div class="filter-bar" id="forecastFilterBar">
+        <button class="filter-btn active" onclick="setForecastFilter('',this)">Все</button>
+        <button class="filter-btn" onclick="setForecastFilter('Napkins',this)">Napkins</button>
+        <button class="filter-btn" onclick="setForecastFilter('Facial Tissue',this)">Facial Tissue</button>
+        <button class="filter-btn" onclick="setForecastFilter('Toilet Paper',this)">Toilet Paper</button>
+        <button class="filter-btn" onclick="setForecastFilter('Towels',this)">Towels</button>
+        <button class="filter-btn" onclick="setForecastFilter('Spunlace',this)">Spunlace</button>
+        <button class="filter-btn" onclick="setForecastFilter('Dispenser',this)">Dispenser</button>
+      </div>
+
+      <div id="forecastImpBar" style="display:flex;gap:6px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
+        <span style="font-size:10px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">Приоритет:</span>
+        <button class="impf-btn active" onclick="setForecastImportance('',this)">Все</button>
+        <button class="impf-btn" onclick="setForecastImportance('high',this)">🔴 High</button>
+        <button class="impf-btn" onclick="setForecastImportance('medium',this)">🟠 Medium</button>
+        <button class="impf-btn" onclick="setForecastImportance('low',this)">⚪ Low</button>
+      </div>
+
+      <div id="forecastContent"><div class="empty">Загрузка…</div></div>
+    </div>
+
+    <!-- ORDERS -->
+    <div class="pane" id="pane-orders">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div><h1 class="page-title">🛒 Orders</h1><p class="page-sub">Smart order suggestions</p></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <button class="btn btn-ghost btn-sm" id="hideZeroOrderBtn" onclick="toggleOrderZero()">🚫 Hide zero/inactive</button>
+          <button class="btn btn-ghost btn-sm" onclick="refreshOrders()">↻ Refresh</button>
+          <button class="btn btn-ghost btn-sm" onclick="exportOrderExcelBySupplier()">📊 Excel/Supplier</button>
+          <button class="btn btn-brand btn-sm" onclick="exportOrderPdf()">📄 Export PDF</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:4px">🎯 Target stock per type (months)</div>
+        <div style="font-size:12px;color:var(--text-2);margin-bottom:14px">Order = target − current − pending.</div>
+        <div id="orderTypeTargets" class="grid" style="grid-template-columns:repeat(6,1fr)"></div>
+      </div>
+
+      <div class="card" style="padding:14px 16px">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+          <div style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+            <span style="font-size:10px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">Type:</span>
+            <div class="pill-row" id="orderTypeFilterBar" style="margin:0"></div>
+          </div>
+          <div style="width:1px;height:24px;background:var(--border)"></div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="font-size:10px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">Supplier:</span>
+            <select id="orderSupplierFilter" onchange="applyOrderFilters()" style="padding:5px 10px;font-size:12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);outline:none"><option value="">— All —</option></select>
+          </div>
+          <div style="width:1px;height:24px;background:var(--border)"></div>
+          <div style="display:flex;gap:6px;align-items:center">
+            <span style="font-size:10px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">Sort:</span>
+            <select id="orderSortSelect" onchange="applyOrderFilters()" style="padding:5px 10px;font-size:12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);outline:none">
+              <option value="">Default</option>
+              <option value="balance-asc">Balance ↑</option>
+              <option value="balance-desc">Balance ↓</option>
+              <option value="suggested-desc">Suggested ↓</option>
+              <option value="priority">Priority first</option>
+              <option value="daysleft-asc">Days left ↑</option>
+              <option value="monthly-desc">Monthly need ↓</option>
+              <option value="supplier">By supplier</option>
+              <option value="type">By type</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-brand btn-sm" onclick="applyOrderFilters()">✓ Apply</button>
+            <button class="btn btn-ghost btn-sm" onclick="resetOrderFilters()">✕ Reset</button>
+          </div>
+          <div style="width:1px;height:24px;background:var(--border)"></div>
+          <div style="display:flex;gap:4px;align-items:center">
+            <span style="font-size:10px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">Priority:</span>
+            <div id="orderImpBar" style="display:flex;gap:4px"></div>
+          </div>
+          <div style="width:1px;height:24px;background:var(--border)"></div>
+          <button class="btn btn-sm" id="orderNeedsOnlyBtn" onclick="showOnlyNeedsOrder()" style="background:var(--brand-light);color:var(--brand-dark);border:1px solid var(--brand)">⚠️ Needs order only</button>
+          <button class="btn btn-sm" style="background:#FBEAEA;color:var(--red);border:1px solid #fca5a5" onclick="fillUrgentOnly()" title="High ≤60d, Medium ≤30d, others ≤14d">🚨 Fill urgent only</button>
+          <button class="btn btn-sm" style="background:#EFF6FF;color:#1d4ed8;border:1px solid #93c5fd" onclick="fillAllSuggested()">⚡ Fill all suggested</button>
+          <button class="btn btn-ghost btn-sm" onclick="saveOrderDraft()">💾 Save draft</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadOrderDraft()">📂 Load draft</button>
+        </div>
+      </div>
+
+      <div id="orderSummaryBar" class="hidden" style="display:flex;align-items:center;gap:16px;padding:12px 16px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);margin-bottom:16px;flex-wrap:wrap">
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total to order</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalQty">0 m</div></div>
+        <div style="width:1px;height:32px;background:var(--brand)"></div>
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Order lines</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderLineCount">0</div></div>
+        <div style="width:1px;height:32px;background:var(--brand)"></div>
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Suppliers</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderSupplierCount">0</div></div>
+        <div style="width:1px;height:32px;background:var(--brand)"></div>
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total weight</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalKg">0 kg</div></div>
+        <div style="margin-left:auto"><button class="btn btn-ghost btn-sm" onclick="toggleGroupBySupplier()">🏭 <span id="groupBySupplierLbl">Group by supplier</span></button></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="card-title">Adjust quantities &amp; assign suppliers</div>
+          <div style="display:flex;gap:6px">
+            <button class="btn btn-ghost btn-sm" onclick="setAllOrderSupplier()">🏭 Set all supplier</button>
+            <button class="btn btn-ghost btn-sm" onclick="clearAllOrders()">✕ Clear all</button>
+          </div>
+        </div>
+        <div id="orderTableWrap" style="overflow-x:auto"></div>
+      </div>
+    </div>
+
+    <!-- DELIVERIES -->
+    <div class="pane" id="pane-deliveries">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div><h1 class="page-title">Deliveries</h1><p class="page-sub">Shared across all users</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="showPane('scanner')">📷 Scan Invoice</button>
+      </div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title" style="margin-bottom:12px">Add delivery</div>
+        <div class="form-grid">
+          <div class="form-row"><label>Supplier</label><select id="dv-supplier"><option value="">— select supplier —</option></select></div>
+          <div class="form-row"><label>Product Type</label><select id="dv-type-filter" onchange="filterDeliveryProductDropdown()"><option value="">— all types —</option>
+            <option>Napkins</option><option>Facial Tissue</option><option>Toilet Paper</option><option>Towels</option><option>Dispenser</option><option>Spunlace</option><option>Other</option>
+          </select></div>
+          <div class="form-row full"><label>Select product</label><select id="dv-product" onchange="onDeliveryProductSelect()"><option value="">— select product —</option></select></div>
+          <div class="form-row"><label>Width (cm)</label><input type="text" id="dv-width" readonly placeholder="Auto-filled"></div>
+          <div class="form-row"><label>Ply</label><input type="text" id="dv-ply" readonly placeholder="Auto-filled"></div>
+          <div class="form-row"><label>GSM</label><input type="text" id="dv-gsm" readonly placeholder="Auto-filled"></div>
+          <div class="form-row"><label>Quantity (m)</label><input type="number" id="dv-qty" min="0" step="0.1" placeholder="e.g. 10000"></div>
+          <div class="form-row"><label>Plate No.</label><input type="text" id="dv-plate" placeholder="e.g. 97AP560"></div>
+          <div class="form-row full"><label>Expected date</label><input type="date" id="dv-date"></div>
+        </div>
+        <div id="dvHint" style="margin-top:6px;padding:9px 14px;background:#FFFBEB;border:1px solid #fcd34d;border-radius:var(--radius-sm);font-size:12px;color:#92400e">💡 Select product — Width, Ply, GSM auto-fill</div>
+        <div class="btn-row">
+          <button class="btn btn-brand" onclick="submitDelivery()">＋ Add delivery</button>
+          <button class="btn btn-ghost" onclick="clearDeliveryForm()">Clear</button>
+        </div>
+        <div class="auth-error" id="dvError"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="card-title">Pending &amp; recent</div>
+          <div class="pill-row" id="deliveryFilterBar" style="margin:0"></div>
+        </div>
+        <div id="deliveryList"></div>
+      </div>
+    </div>
+
+    <!-- RESERVATIONS -->
+    <div class="pane" id="pane-reservations">
+      <div class="page-header"><h1 class="page-title">📌 Reservations</h1><p class="page-sub">Reserve stock for production — deducted only after specialist verification</p></div>
+
+      <div class="grid grid-4" style="margin-bottom:16px">
+        <div class="card"><div class="card-title">📌 Active</div><div class="stat-num num" id="resKpiActive" style="color:var(--amber)">—</div></div>
+        <div class="card"><div class="card-title">Reserved total</div><div class="stat-num num" id="resKpiTotal" style="color:var(--amber)">—</div></div>
+        <div class="card"><div class="card-title">✅ Confirmed</div><div class="stat-num num" id="resKpiConfirmed" style="color:var(--green)">—</div></div>
+        <div class="card"><div class="card-title">✕ Cancelled</div><div class="stat-num num" id="resKpiCancelled" style="color:var(--text-3)">—</div></div>
+      </div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+          <div class="card-title">＋ New reservation</div>
+          <button class="btn btn-ghost btn-sm" onclick="toggleResScanner()"><span id="resScanToggleLbl">📷 Scan document</span></button>
+        </div>
+
+        <div id="resScanArea" class="hidden" style="margin-bottom:16px">
+          <div id="resScanDrop" class="card" style="text-align:center;padding:26px 20px;cursor:pointer;border:2px dashed var(--border)"
+               onclick="document.getElementById('resScanFile').click()"
+               ondragover="event.preventDefault();this.style.borderColor='var(--brand)';this.style.background='var(--brand-light)'"
+               ondragleave="this.style.borderColor='var(--border)';this.style.background='var(--surface)'"
+               ondrop="event.preventDefault();this.style.borderColor='var(--border)';this.style.background='var(--surface)';resScanFromDrop(event)">
+            <div style="font-size:30px;margin-bottom:6px">📄</div>
+            <div style="font-size:13px;font-weight:600;margin-bottom:4px">Drop production request / picking list here</div>
+            <div style="font-size:11.5px;color:var(--text-2)">or click to browse — AI reads product lines &amp; quantities</div>
+            <input type="file" id="resScanFile" accept="image/*" style="display:none" onchange="resScanFile(this.files[0])">
+          </div>
+          <div id="resScanPreview" class="hidden" style="margin-top:10px">
+            <div style="display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap">
+              <img id="resScanImg" style="max-height:140px;max-width:220px;border-radius:var(--radius-sm);border:1px solid var(--border);object-fit:contain">
+              <div style="flex:1;min-width:160px">
+                <div style="padding:8px 12px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);font-size:12px;color:var(--brand-dark);margin-bottom:8px">✅ Image ready</div>
+                <button class="btn btn-brand" style="width:100%;justify-content:center" onclick="resRunScan()">🔍 Scan with AI</button>
+              </div>
+            </div>
+          </div>
+          <div id="resScanLoading" class="hidden" style="text-align:center;padding:20px">
+            <div style="font-size:26px">⚙️</div>
+            <div style="font-size:12.5px;font-weight:600;margin-top:6px">Reading document…</div>
+          </div>
+          <div id="resScanResults" class="hidden" style="margin-top:10px"></div>
+        </div>
+
+        <div class="form-grid">
+          <div class="form-row"><label>Type filter</label><select id="res-type-filter" onchange="filterResProductDropdown()"><option value="">— all —</option>
+            <option>Napkins</option><option>Facial Tissue</option><option>Toilet Paper</option><option>Towels</option><option>Dispenser</option><option>Spunlace</option><option>Other</option>
+          </select></div>
+          <div class="form-row"><label>Date</label><input type="date" id="res-date"></div>
+          <div class="form-row full" id="resManualFormAnchor"><label>Product</label><select id="res-product" onchange="onResProductSelect()"><option value="">— select product —</option></select>
+            <div id="resAvailInfo" class="hidden" style="margin-top:6px;font-size:12px;padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm)"></div>
+          </div>
+          <div class="form-row"><label>Width (cm)</label><input type="text" id="res-width" placeholder="auto from product"></div>
+          <div class="form-row"><label>Ply</label><input type="text" id="res-ply" placeholder="auto"></div>
+          <div class="form-row"><label>GSM</label><input type="text" id="res-gsm" placeholder="auto"></div>
+          <div class="form-row"><label>Quantity (m)</label><input type="number" id="res-qty" placeholder="e.g. 5000" min="0" step="0.1"></div>
+          <div class="form-row full"><label>Destination</label><input id="res-dest" list="res-dest-list" placeholder="e.g. Wet Wipes Production"><datalist id="res-dest-list"><option value="Wet Wipes Production"><option value="Facial Tissue Production"><option value="Napkins Production"><option value="Toilet Paper Production"><option value="Other"></datalist></div>
+          <div class="form-row full"><label>Note</label><input id="res-note" placeholder="optional"></div>
+        </div>
+        <div style="margin-top:6px;padding:9px 14px;background:#FFFBEB;border:1px solid #fcd34d;border-radius:var(--radius-sm);font-size:12px;color:#92400e">📌 Reserved quantity stays in stock balance until a specialist verifies it and presses «Verified — deduct».</div>
+        <div class="btn-row">
+          <button class="btn" id="resSubmitBtn" style="background:var(--amber);color:#fff" onclick="submitReservation()">📌 Reserve</button>
+          <button class="btn btn-ghost" onclick="clearResForm()">Clear</button>
+        </div>
+        <div class="auth-error" id="resError"></div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:10px">
+          <div class="card-title">Reservations</div>
+          <div class="pill-row" id="resFilterBar" style="margin:0"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding-bottom:10px;margin-bottom:10px;border-bottom:1px solid var(--border)">
+          <span style="font-size:11px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">📅 Date:</span>
+          <input type="date" id="res-date-filter" onchange="renderReservations()" style="padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+          <button class="btn btn-ghost btn-sm hidden" id="resDateClearBtn" onclick="clearResDateFilter()">✕ Clear date</button>
+          <span id="resDateCount" style="font-size:12px;color:var(--text-2)"></span>
+        </div>
+        <div id="resList"></div>
+      </div>
+    </div>
+
+    <!-- RESERVATION CONFIRM MODAL -->
+    <div id="resConfirmModal" class="hidden" style="position:fixed;inset:0;background:rgba(20,30,25,.45);z-index:100;align-items:center;justify-content:center;padding:16px">
+      <div style="background:var(--surface);border-radius:var(--radius);width:420px;max-width:100%;box-shadow:0 12px 40px rgba(0,0,0,.25)">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid var(--border)">
+          <div style="font-size:14px;font-weight:700">✅ Verify &amp; deduct from stock</div>
+          <button class="btn btn-ghost btn-sm" onclick="document.getElementById('resConfirmModal').classList.add('hidden')">✕</button>
+        </div>
+        <div style="padding:18px">
+          <input type="hidden" id="rc-id">
+          <div id="rc-info" style="background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;margin-bottom:14px"></div>
+          <div class="form-row"><label>Verified quantity (m)</label><input type="number" id="rc-actual" min="0" step="0.1">
+            <div style="font-size:11px;color:var(--text-2);margin-top:4px">Adjust if the checked amount differs from reserved. This will be deducted from stock.</div>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-ghost" style="flex:1;justify-content:center" onclick="document.getElementById('resConfirmModal').classList.add('hidden')">Cancel</button>
+            <button class="btn btn-brand" style="flex:1;justify-content:center" onclick="submitResConfirm()">✅ Verified — deduct</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- SCANNER -->
+    <div class="pane" id="pane-scanner">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
+        <div><h1 class="page-title">📷 Invoice Scanner</h1><p class="page-sub">Upload packing list → AI extracts lines → add to deliveries</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="resetScanner()">↺ Reset</button>
+      </div>
+
+      <div id="scannerDropZone" class="card" style="text-align:center;padding:48px 20px;cursor:pointer;border:2px dashed var(--border)"
+           onclick="document.getElementById('scannerFileInput').click()"
+           ondragover="event.preventDefault();this.style.borderColor='var(--brand)';this.style.background='var(--brand-light)'"
+           ondragleave="this.style.borderColor='var(--border)';this.style.background='var(--surface)'"
+           ondrop="event.preventDefault();this.style.borderColor='var(--border)';this.style.background='var(--surface)';handleScannerDrop(event)">
+        <div style="font-size:40px;margin-bottom:10px">📄</div>
+        <div style="font-size:15px;font-weight:600;margin-bottom:6px">Drop invoice / packing list photo here</div>
+        <div style="font-size:12.5px;color:var(--text-2)">or click to browse — JPG, PNG, screenshot</div>
+        <input type="file" id="scannerFileInput" accept="image/*" style="display:none" onchange="handleScannerFile(this.files[0])">
+      </div>
+
+      <div id="scannerPreviewZone" class="hidden card">
+        <div style="display:flex;gap:16px;align-items:flex-start;flex-wrap:wrap">
+          <img id="scannerPreviewImg" style="max-height:200px;max-width:260px;border-radius:var(--radius-sm);border:1px solid var(--border);object-fit:contain">
+          <div style="flex:1;min-width:200px">
+            <div style="padding:9px 14px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);font-size:12.5px;color:var(--brand-dark);margin-bottom:12px">✅ Image ready — click Scan to extract line items</div>
+            <button class="btn btn-brand" style="width:100%;justify-content:center;padding:12px" onclick="runScanner()">🔍 Scan Invoice with AI</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="scannerLoading" class="hidden card" style="text-align:center;padding:36px">
+        <div style="font-size:34px;margin-bottom:10px">⚙️</div>
+        <div style="font-size:14px;font-weight:600">Scanning invoice…</div>
+        <div style="font-size:12px;color:var(--text-2);margin-top:4px">Claude AI is reading the document</div>
+      </div>
+
+      <div id="scannerResults" class="hidden"></div>
+    </div>
+
+    <!-- PRODUCTS -->
+    <div class="pane" id="pane-products">
+      <div class="page-header"><h1 class="page-title">Products</h1><p class="page-sub">Управление товарами и их характеристиками</p></div>
+
+      <div class="card" style="max-width:520px;margin-bottom:20px">
+        <div class="card-title">Новый товар</div>
+        <div class="form-row"><label>Название</label><input type="text" id="np-name"></div>
+        <div class="form-grid">
+          <div class="form-row"><label>Тип</label>
+            <select id="np-type">
+              <option value="Napkins">Napkins</option>
+              <option value="Facial Tissue">Facial Tissue</option>
+              <option value="Toilet Paper">Toilet Paper</option>
+              <option value="Towels">Towels</option>
+              <option value="Dispenser">Dispenser</option>
+              <option value="Spunlace">Spunlace</option>
+              <option value="Other">Other</option>
+            </select>
+          </div>
+          <div class="form-row"><label>Цель запаса (мес.)</label><input type="number" id="np-target" value="2" step="0.5" min="0"></div>
+        </div>
+        <div class="form-grid">
+          <div class="form-row"><label>Ширина (см)</label><input type="number" id="np-width" step="0.1"></div>
+          <div class="form-row"><label>Ply</label><input type="number" id="np-ply" value="1" min="1" step="1"></div>
+        </div>
+        <div class="form-row" style="max-width:150px"><label>GSM</label><input type="number" id="np-gsm" step="0.1"></div>
+        <div class="btn-row">
+          <button class="btn btn-brand" onclick="submitProduct()">＋ Добавить товар</button>
+        </div>
+        <div class="auth-error" id="npError"></div>
+      </div>
+      <div style="padding:10px 16px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);margin-bottom:14px;font-size:13px;color:var(--brand-dark)">✏️ Задайте ручную месячную норму расхода — используется в Forecast/Stock Levels при переключении на «Ручная».</div>
+
+      <div class="pill-row" id="productsTypeFilter"></div>
+      <div style="margin-bottom:10px"><input id="productsSearch" placeholder="🔍 Поиск..." oninput="renderProducts()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="productsTable" class="products-table"><thead><tr>
+          <th>Product Name</th><th>Type</th><th>Width (cm)</th><th>Ply</th><th>GSM</th><th>Balance</th>
+          <th>Weighted Daily</th><th>Manual Monthly (m)</th><th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col">Action</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+    <!-- SUPPLIERS -->
+    <div class="pane" id="pane-suppliers">
+      <div class="page-header"><h1 class="page-title">Suppliers</h1><p class="page-sub">Контакты поставщиков</p></div>
+
+      <div class="card" style="max-width:460px;margin-bottom:20px">
+        <div class="card-title">Новый поставщик</div>
+        <div class="form-row"><label>Название *</label><input type="text" id="ns-name"></div>
+        <div class="form-grid">
+          <div class="form-row"><label>Контакт</label><input type="text" id="ns-contact"></div>
+          <div class="form-row"><label>Телефон</label><input type="text" id="ns-phone"></div>
+        </div>
+        <div class="form-row"><label>Email</label><input type="email" id="ns-email"></div>
+        <div class="btn-row">
+          <button class="btn btn-brand" onclick="submitSupplier()">＋ Добавить</button>
+        </div>
+        <div class="auth-error" id="nsError"></div>
+      </div>
+
+      <div style="margin-bottom:10px"><input id="suppliersSearch" placeholder="🔍 Поиск..." oninput="renderSuppliers()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="suppliersTable"><thead><tr><th>Название</th><th>Контакт</th><th>Телефон</th><th>Email</th></tr></thead><tbody></tbody></table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<div id="toastHost"></div>
+
+<!-- KPI DRILL-DOWN MODAL -->
+<div id="kpiDrillModal" class="hidden" style="position:fixed;inset:0;background:rgba(20,30,25,.45);z-index:100;align-items:center;justify-content:center;padding:16px">
+  <div style="background:var(--surface);border-radius:var(--radius);width:560px;max-width:100%;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:16px 18px;border-bottom:1px solid var(--border)">
+      <div style="min-width:0">
+        <div style="font-size:15px;font-weight:700" id="kpiDrillTitle">Разбивка</div>
+        <div style="font-size:11px;color:var(--text-3);margin-top:2px" id="kpiDrillCrumb"></div>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;flex-shrink:0">
+        <button id="kpiDrillBack" class="btn btn-ghost btn-sm hidden" onclick="kpiDrillBack()">← Назад</button>
+        <button class="btn btn-ghost btn-sm" onclick="closeKpiDrill()">✕</button>
+      </div>
+    </div>
+    <div style="padding:16px 18px;overflow-y:auto" id="kpiDrillBody"></div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
+<script src="config.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
