@@ -66,13 +66,25 @@ sb.auth.onAuthStateChange(async (_event, session)=>{
     document.getElementById('app').classList.remove('hidden');
     document.getElementById('whoName').textContent = myProfile?.full_name || me.email;
     document.getElementById('whoRole').textContent = roleLabel(myProfile?.role);
+    applyRoleNav();
     await refreshAll();
+    if(myProfile?.role==='restricted') showPane('reservations');
   } else {
     me = null; myProfile = null;
     document.getElementById('app').classList.add('hidden');
     document.getElementById('authScreen').classList.remove('hidden');
   }
 });
+
+const RESTRICTED_PAGES = ['reservations','levels','deliveries'];
+
+function applyRoleNav(){
+  const restricted = myProfile?.role==='restricted';
+  document.querySelectorAll('.nav-item').forEach(el=>{
+    el.style.display = (!restricted || RESTRICTED_PAGES.includes(el.dataset.pane)) ? '' : 'none';
+  });
+  document.querySelectorAll('.nav-group-label').forEach(el=>{ el.style.display = restricted ? 'none' : ''; });
+}
 
 function roleLabel(r){
   return r==='admin' ? '👑 Администратор' : r==='restricted' ? '👁 Только просмотр' : '👤 Пользователь';
@@ -89,6 +101,7 @@ function canEdit(){ return myProfile && myProfile.role !== 'restricted'; }
 // NAV
 // ---------------------------------------------------------------
 function showPane(name){
+  if(myProfile?.role==='restricted' && !RESTRICTED_PAGES.includes(name)) name = 'reservations';
   document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('pane-'+name).classList.add('active');
