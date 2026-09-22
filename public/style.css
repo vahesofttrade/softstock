@@ -171,7 +171,7 @@ tr:hover td{background:var(--surface-2)}
 .btn-red:hover{background:#F6D5D5}
 .btn-sm{padding:5px 11px;font-size:12.5px}
 
-.pill{display:inline-flex;padding:3px 10px;border-radius:99px;font-size:12px;border:1px solid var(--border);background:var(--surface);color:var(--text-2)}
+.pill{--c:var(--brand);display:inline-flex;padding:3px 10px;border-radius:99px;font-size:12px;border:1px solid var(--border);background:var(--surface);color:var(--text-2)}
 .pill.active{background:var(--c);border-color:var(--c);color:#fff;font-weight:600}
 .pill-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:16px}
 
