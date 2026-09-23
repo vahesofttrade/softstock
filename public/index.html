@@ -84,10 +84,10 @@
       </div>
 
       <div class="grid grid-4" style="margin-bottom:16px">
-        <div class="card" style="cursor:pointer" onclick="openKpiDrill('today')" title="Разбить по типам и товарам"><div class="card-title">Сегодня</div><div class="stat-num num" id="kpiToday">—</div><div class="stat-sub" id="kpiTodaySub">расход, м · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('today')" title="Разбить по типам и товарам"><div class="card-title">Сегодня</div><div class="stat-num num" id="kpiToday">—</div><div class="stat-sub" id="kpiTodaySub">расход, кг · по типам ›</div></div>
         <div class="card" style="cursor:pointer" onclick="openKpiDrill('avgDaily')" title="Разбить по типам и товарам"><div class="card-title">Средний расход/день</div><div class="stat-num num" id="kpiAvgDaily">—</div><div class="stat-sub">за 30 дней, все типы · по типам ›</div></div>
-        <div class="card" style="cursor:pointer" onclick="openKpiDrill('mtd')" title="Разбить по типам и товарам"><div class="card-title">Расход с начала месяца</div><div class="stat-num num" id="kpiMtdUsage">—</div><div class="stat-sub" id="kpiMtdSub">м · по типам ›</div></div>
-        <div class="card" style="cursor:pointer" onclick="openKpiDrill('lastMonth')" title="Разбить по типам и товарам"><div class="card-title">Итог за прошлый месяц</div><div class="stat-num num" id="kpiLastMonth">—</div><div class="stat-sub">м · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('mtd')" title="Разбить по типам и товарам"><div class="card-title">Расход с начала месяца</div><div class="stat-num num" id="kpiMtdUsage">—</div><div class="stat-sub" id="kpiMtdSub">кг · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('lastMonth')" title="Разбить по типам и товарам"><div class="card-title">Итог за прошлый месяц</div><div class="stat-num num" id="kpiLastMonth">—</div><div class="stat-sub">кг · по типам ›</div></div>
       </div>
 
       <div class="grid grid-2" style="align-items:start;margin-bottom:16px">
@@ -158,7 +158,7 @@
           </select>
         </div>
         <div class="form-grid">
-          <div class="form-row"><label>Количество (м)</label><input type="number" id="se-qty" step="0.1" min="0"></div>
+          <div class="form-row"><label>Количество (кг)</label><input type="number" id="se-qty" step="0.1" min="0"></div>
           <div class="form-row"><label>Дата</label><input type="date" id="se-date"></div>
         </div>
         <div class="form-row"><label>Примечание</label><input type="text" id="se-note" placeholder="необязательно"></div>
@@ -214,8 +214,8 @@
             <th onclick="setLvlSort('type')" style="cursor:pointer">Тип</th>
             <th onclick="setLvlSort('width')" style="cursor:pointer">Ширина</th>
             <th>Ply</th><th>GSM</th>
-            <th onclick="setLvlSort('balance')" style="cursor:pointer">Остаток (м)</th>
-            <th style="color:var(--brand)">Ожидается</th>
+            <th onclick="setLvlSort('balance')" style="cursor:pointer">Остаток (кг)</th>
+            <th style="color:var(--brand)">Ожидается (кг)</th>
             <th onclick="setLvlSort('u30')" style="cursor:pointer">30д</th>
             <th onclick="setLvlSort('daily')" style="cursor:pointer">Расход/день</th>
             <th onclick="setLvlSort('days')" style="cursor:pointer">Дней</th>
@@ -240,7 +240,7 @@
           <th onclick="setHistSort('date')" style="cursor:pointer">Дата</th>
           <th onclick="setHistSort('product')" style="cursor:pointer">Товар</th>
           <th onclick="setHistSort('op')" style="cursor:pointer">Операция</th>
-          <th onclick="setHistSort('qty')" style="cursor:pointer">Кол-во (м)</th>
+          <th onclick="setHistSort('qty')" style="cursor:pointer">Кол-во (кг)</th>
           <th>Примечание</th><th>Пользователь</th>
         </tr></thead><tbody></tbody></table>
       </div>
@@ -349,13 +349,13 @@
       </div>
 
       <div id="orderSummaryBar" class="hidden" style="display:flex;align-items:center;gap:16px;padding:12px 16px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);margin-bottom:16px;flex-wrap:wrap">
-        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total to order</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalQty">0 m</div></div>
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total to order</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalQty">0 kg</div></div>
         <div style="width:1px;height:32px;background:var(--brand)"></div>
         <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Order lines</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderLineCount">0</div></div>
         <div style="width:1px;height:32px;background:var(--brand)"></div>
         <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Suppliers</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderSupplierCount">0</div></div>
         <div style="width:1px;height:32px;background:var(--brand)"></div>
-        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total weight</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalKg">0 kg</div></div>
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total weight (t)</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalKg">0 t</div></div>
         <div style="margin-left:auto"><button class="btn btn-ghost btn-sm" onclick="toggleGroupBySupplier()">🏭 <span id="groupBySupplierLbl">Group by supplier</span></button></div>
       </div>
 
@@ -389,7 +389,7 @@
           <div class="form-row"><label>Width (cm)</label><input type="text" id="dv-width" readonly placeholder="Auto-filled"></div>
           <div class="form-row"><label>Ply</label><input type="text" id="dv-ply" readonly placeholder="Auto-filled"></div>
           <div class="form-row"><label>GSM</label><input type="text" id="dv-gsm" readonly placeholder="Auto-filled"></div>
-          <div class="form-row"><label>Quantity (m)</label><input type="number" id="dv-qty" min="0" step="0.1" placeholder="e.g. 10000"></div>
+          <div class="form-row"><label>Quantity (kg)</label><input type="number" id="dv-qty" min="0" step="0.1" placeholder="e.g. 10000"></div>
           <div class="form-row"><label>Plate No.</label><input type="text" id="dv-plate" placeholder="e.g. 97AP560"></div>
           <div class="form-row full"><label>Expected date</label><input type="date" id="dv-date"></div>
         </div>
@@ -473,7 +473,7 @@
           <div class="form-row"><label>Width (cm)</label><input type="text" id="res-width" placeholder="auto from product"></div>
           <div class="form-row"><label>Ply</label><input type="text" id="res-ply" placeholder="auto"></div>
           <div class="form-row"><label>GSM</label><input type="text" id="res-gsm" placeholder="auto"></div>
-          <div class="form-row"><label>Quantity (m)</label><input type="number" id="res-qty" placeholder="e.g. 5000" min="0" step="0.1"></div>
+          <div class="form-row"><label>Quantity (kg)</label><input type="number" id="res-qty" placeholder="e.g. 5000" min="0" step="0.1"></div>
           <div class="form-row full"><label>Destination</label><input id="res-dest" list="res-dest-list" placeholder="e.g. Wet Wipes Production"><datalist id="res-dest-list"><option value="Wet Wipes Production"><option value="Facial Tissue Production"><option value="Napkins Production"><option value="Toilet Paper Production"><option value="Other"></datalist></div>
           <div class="form-row full"><label>Note</label><input id="res-note" placeholder="optional"></div>
         </div>
@@ -516,7 +516,7 @@
         <div style="padding:18px">
           <input type="hidden" id="rc-id">
           <div id="rc-info" style="background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;margin-bottom:14px"></div>
-          <div class="form-row"><label>Verified quantity (m)</label><input type="number" id="rc-actual" min="0" step="0.1">
+          <div class="form-row"><label>Verified quantity (kg)</label><input type="number" id="rc-actual" min="0" step="0.1">
             <div style="font-size:11px;color:var(--text-2);margin-top:4px">Adjust if the checked amount differs from reserved. This will be deducted from stock.</div>
           </div>
           <div class="btn-row">
@@ -607,7 +607,7 @@
           <th>Ply</th><th>GSM</th>
           <th onclick="setProdSort('balance')" style="cursor:pointer">Balance</th>
           <th onclick="setProdSort('weighted')" style="cursor:pointer">Weighted Daily</th>
-          <th onclick="setProdSort('manual')" style="cursor:pointer">Manual Monthly (m)</th>
+          <th onclick="setProdSort('manual')" style="cursor:pointer">Manual Monthly (kg)</th>
           <th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col">Action</th>
         </tr></thead><tbody></tbody></table>
       </div>

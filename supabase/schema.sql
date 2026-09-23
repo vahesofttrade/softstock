@@ -56,7 +56,7 @@ create table if not exists products (
   gsm                 numeric,
   balance             numeric not null default 0,
   priority            text check (priority in ('high','medium','low')),
-  manual_monthly_rate numeric,          -- optional manual m/month override
+  manual_monthly_rate numeric,          -- optional manual kg/month override
   composition         text,             -- e.g. Spunlace PES/VIS ratio "30/70"
   target_months       numeric not null default 2,  -- used by Orders page
   created_at          timestamptz not null default now()
@@ -115,8 +115,7 @@ create table if not exists deliveries (
   id            bigint generated always as identity primary key,
   product_id    bigint not null references products(id) on delete cascade,
   supplier_id   bigint references suppliers(id),
-  quantity      numeric not null,
-  unit          text not null default 'm' check (unit in ('m','kg')),
+  quantity      numeric not null,          -- kg
   plate_no      text default '',
   expected_date date,
   status        text not null default 'pending' check (status in ('pending','arrived')),
@@ -180,7 +179,7 @@ create policy "suppliers_delete" on suppliers for delete using (is_editor());
 create policy "deliveries_select" on deliveries for select using (auth.uid() is not null);
 create policy "deliveries_insert" on deliveries for insert with check (is_editor());
 create policy "deliveries_update" on deliveries for update using (is_editor());
-create policy "deliveries_delete" on deliveries for delete using (is_admin());
+create policy "deliveries_delete" on deliveries for delete using (is_editor());
 
 -- reservations: ANY signed-in user can create a reservation (this is the whole point
 -- of the 'restricted' role — floor staff can reserve stock for production themselves).
