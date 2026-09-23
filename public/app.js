@@ -832,16 +832,26 @@ function showMonthTypeProducts(year, m, label, type){
   }).join('');
 }
 
+let dashDetailSortCol='', dashDetailSortDir=1;
+function setDashDetailSort(col){ if(dashDetailSortCol===col) dashDetailSortDir*=-1; else { dashDetailSortCol=col; dashDetailSortDir=1; } renderDashDetail(); }
+
 function renderDashDetail(){
   const last30 = windowTotalsByProduct(30,0);
   const prev30 = windowTotalsByProduct(60,30);
   const avgByProd = avgDailyByProduct();
-  const rows = Object.entries(last30).map(([pid,v])=>{
+  let rows = Object.entries(last30).map(([pid,v])=>{
     const p = products.find(x=>x.id==pid);
     const prev = prev30[pid]||0;
     const delta = prev>0 ? Math.round((v-prev)/prev*100) : (v>0?100:0);
     return {p, v, prev, delta, daily: avgByProd[pid]||0};
-  }).filter(r=>r.p).sort((a,b)=>b.v-a.v).slice(0,15);
+  }).filter(r=>r.p);
+  if(dashDetailSortCol){
+    const key = { name:r=>r.p.name.toLowerCase(), type:r=>r.p.type, v:r=>r.v, prev:r=>r.prev, delta:r=>r.delta, daily:r=>r.daily }[dashDetailSortCol];
+    rows.sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*dashDetailSortDir; });
+  } else {
+    rows.sort((a,b)=>b.v-a.v);
+  }
+  rows = rows.slice(0,15);
 
   const tbody = document.querySelector('#dashDetailTable tbody');
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет данных</td></tr>'; return; }
@@ -855,16 +865,29 @@ function renderDashDetail(){
   </tr>`).join('');
 }
 
+let dashRecentSortCol='', dashRecentSortDir=1;
+function setDashRecentSort(col){ if(dashRecentSortCol===col) dashRecentSortDir*=-1; else { dashRecentSortCol=col; dashRecentSortDir=1; } renderDashRecent(); }
+
 function renderDashRecent(){
   const seen = new Set();
-  const rows = [];
+  let rows = [];
   for(const r of stockLog){
     if(seen.has(r.product_id)) continue;
     seen.add(r.product_id);
     rows.push(r);
-    if(rows.length>=12) break;
+    if(!dashRecentSortCol && rows.length>=12) break;
   }
   const avgByProd = avgDailyByProduct();
+  if(dashRecentSortCol){
+    const key = {
+      name:r=>(products.find(x=>x.id===r.product_id)?.name||'').toLowerCase(),
+      type:r=>products.find(x=>x.id===r.product_id)?.type||'',
+      balance:r=>Number(products.find(x=>x.id===r.product_id)?.balance||0),
+      daily:r=>avgByProd[r.product_id]||0,
+      date:r=>r.date
+    }[dashRecentSortCol];
+    rows = [...rows].sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*dashRecentSortDir; }).slice(0,15);
+  }
   const tbody = document.querySelector('#dashRecentTable tbody');
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="5" class="empty">Нет записей</td></tr>'; return; }
   tbody.innerHTML = rows.map(r=>{
@@ -1160,12 +1183,21 @@ function renderLevels(){
 // ---------------------------------------------------------------
 // HISTORY
 // ---------------------------------------------------------------
+let histSortCol='', histSortDir=1;
+function setHistSort(col){ if(histSortCol===col) histSortDir*=-1; else { histSortCol=col; histSortDir=1; } renderHistory(); }
+
 function renderHistory(){
   const search = (document.getElementById('historySearch')?.value||'').toLowerCase();
   const tbody = document.querySelector('#historyTable tbody');
   let rows = stockLog;
   if(search) rows = rows.filter(r=> (r.products?.name||'').toLowerCase().includes(search) || (r.products?.type||'').toLowerCase().includes(search) || (r.note||'').toLowerCase().includes(search));
-  rows = rows.slice(0,60);
+  if(histSortCol){
+    const key = { date:r=>r.date, product:r=>(r.products?.name||'').toLowerCase(), op:r=>r.operation, qty:r=>Number(r.quantity) }[histSortCol];
+    if(key) rows = [...rows].sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*histSortDir; });
+  } else {
+    rows = rows.slice(0,60);
+  }
+  if(histSortCol) rows = rows.slice(0,200);
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет записей</td></tr>'; return; }
   const opLabel = {add:'Приход +', deduct:'Расход −', update:'Установлено ='};
   tbody.innerHTML = rows.map(r=>`<tr>
@@ -1802,10 +1834,14 @@ function renderDeliveries(){
     if(!groups[key]) groups[key] = {truck, date, items:[]};
     groups[key].items.push(d);
   });
+  const sortMode = document.getElementById('deliverySort')?.value || 'date-desc';
+  const groupQty = g => g.items.reduce((s,x)=>s+Number(x.quantity||0),0);
   const entries = Object.entries(groups).sort((a,b)=>{
+    if(sortMode==='qty-desc') return groupQty(b[1]) - groupQty(a[1]);
+    if(sortMode==='qty-asc') return groupQty(a[1]) - groupQty(b[1]);
     const da = a[1].date>'— no date —' ? a[1].date : '';
     const db = b[1].date>'— no date —' ? b[1].date : '';
-    return db.localeCompare(da);
+    return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
   });
 
   wrap.innerHTML = entries.map(([key,g])=>{
@@ -1943,6 +1979,13 @@ function renderReservations(){
   document.getElementById('resDateClearBtn').classList.toggle('hidden', !dateF);
   if(dateF) items = items.filter(r=>r.date===dateF);
   document.getElementById('resDateCount').textContent = dateF ? items.length+' on '+dateF : '';
+  const sortMode = document.getElementById('resSort')?.value || 'date-desc';
+  items = [...items].sort((a,b)=>{
+    if(sortMode==='qty-desc') return Number(b.quantity)-Number(a.quantity);
+    if(sortMode==='qty-asc') return Number(a.quantity)-Number(b.quantity);
+    const da = a.created_at||'', db = b.created_at||'';
+    return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
+  });
 
   const wrap = document.getElementById('resList');
   if(!items.length){ wrap.innerHTML = '<div class="empty">No reservations'+(dateF?' on this date':'')+'</div>'; return; }
@@ -2390,6 +2433,9 @@ async function deleteProduct(id){
 
 let productsTypeFilter = '';
 
+let prodSortCol='', prodSortDir=1;
+function setProdSort(col){ if(prodSortCol===col) prodSortDir*=-1; else { prodSortCol=col; prodSortDir=1; } renderProducts(); }
+
 function renderProducts(){
   const search = (document.getElementById('productsSearch')?.value||'').toLowerCase();
   document.getElementById('productsTypeFilter').innerHTML = ['',...TYPES].map(t=>{
@@ -2403,6 +2449,13 @@ function renderProducts(){
   let rows = products;
   if(productsTypeFilter) rows = rows.filter(p=>p.type===productsTypeFilter);
   if(search) rows = rows.filter(p=> p.name.toLowerCase().includes(search) || p.type.toLowerCase().includes(search));
+  if(prodSortCol){
+    const key = {
+      name:p=>p.name.toLowerCase(), type:p=>p.type, width:p=>p.width_cm||0,
+      balance:p=>Number(p.balance), weighted:p=>avgByProd[p.id]||0, manual:p=>p.manual_monthly_rate||0
+    }[prodSortCol];
+    if(key) rows = [...rows].sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*prodSortDir; });
+  }
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="13" class="empty">Ничего не найдено</td></tr>'; return; }
 
   tbody.innerHTML = rows.map(p=>{
@@ -2532,9 +2585,12 @@ async function deleteSupplier(id){
 
 function renderSuppliers(){
   const search = (document.getElementById('suppliersSearch')?.value||'').toLowerCase();
+  const sortMode = document.getElementById('suppliersSort')?.value||'';
   const wrap = document.getElementById('supplierList');
   let rows = suppliers;
   if(search) rows = rows.filter(s=> s.name.toLowerCase().includes(search) || (s.contact||'').toLowerCase().includes(search) || (s.phone||'').toLowerCase().includes(search) || (s.email||'').toLowerCase().includes(search));
+  if(sortMode==='name-asc') rows = [...rows].sort((a,b)=>a.name.localeCompare(b.name));
+  else if(sortMode==='name-desc') rows = [...rows].sort((a,b)=>b.name.localeCompare(a.name));
   if(!rows.length){ wrap.innerHTML = '<div class="empty">Ничего не найдено</div>'; return; }
   wrap.innerHTML = rows.map(s=>{
     const metaParts = [

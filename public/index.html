@@ -119,12 +119,25 @@
 
       <div class="card-title" style="margin-bottom:8px">🔎 Детально: топ расхода (30 дней)</div>
       <div class="card" style="padding:0;overflow-x:auto;margin-bottom:16px">
-        <table id="dashDetailTable"><thead><tr><th>Товар</th><th>Тип</th><th>30д</th><th>Пред. 30д</th><th>Δ</th><th>Расход/день</th></tr></thead><tbody></tbody></table>
+        <table id="dashDetailTable"><thead><tr>
+          <th onclick="setDashDetailSort('name')" style="cursor:pointer">Товар</th>
+          <th onclick="setDashDetailSort('type')" style="cursor:pointer">Тип</th>
+          <th onclick="setDashDetailSort('v')" style="cursor:pointer">30д</th>
+          <th onclick="setDashDetailSort('prev')" style="cursor:pointer">Пред. 30д</th>
+          <th onclick="setDashDetailSort('delta')" style="cursor:pointer">Δ</th>
+          <th onclick="setDashDetailSort('daily')" style="cursor:pointer">Расход/день</th>
+        </tr></thead><tbody></tbody></table>
       </div>
 
       <div class="card-title" style="margin-bottom:8px">🕐 Недавно обновлённые</div>
       <div class="card" style="padding:0;overflow-x:auto">
-        <table id="dashRecentTable"><thead><tr><th>Товар</th><th>Тип</th><th>Остаток</th><th>Расход/день</th><th>Обновлено</th></tr></thead><tbody></tbody></table>
+        <table id="dashRecentTable"><thead><tr>
+          <th onclick="setDashRecentSort('name')" style="cursor:pointer">Товар</th>
+          <th onclick="setDashRecentSort('type')" style="cursor:pointer">Тип</th>
+          <th onclick="setDashRecentSort('balance')" style="cursor:pointer">Остаток</th>
+          <th onclick="setDashRecentSort('daily')" style="cursor:pointer">Расход/день</th>
+          <th onclick="setDashRecentSort('date')" style="cursor:pointer">Обновлено</th>
+        </tr></thead><tbody></tbody></table>
       </div>
     </div>
 
@@ -223,7 +236,13 @@
       <div class="page-header"><h1 class="page-title">History</h1><p class="page-sub">Последние 60 операций</p></div>
       <div style="margin-bottom:10px"><input id="historySearch" placeholder="🔍 Поиск..." oninput="renderHistory()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
       <div class="card" style="padding:0;overflow-x:auto">
-        <table id="historyTable"><thead><tr><th>Дата</th><th>Товар</th><th>Операция</th><th>Кол-во (м)</th><th>Примечание</th><th>Пользователь</th></tr></thead><tbody></tbody></table>
+        <table id="historyTable"><thead><tr>
+          <th onclick="setHistSort('date')" style="cursor:pointer">Дата</th>
+          <th onclick="setHistSort('product')" style="cursor:pointer">Товар</th>
+          <th onclick="setHistSort('op')" style="cursor:pointer">Операция</th>
+          <th onclick="setHistSort('qty')" style="cursor:pointer">Кол-во (м)</th>
+          <th>Примечание</th><th>Пользователь</th>
+        </tr></thead><tbody></tbody></table>
       </div>
     </div>
 
@@ -383,9 +402,17 @@
       </div>
 
       <div class="card">
-        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <div class="card-title">Pending &amp; recent</div>
-          <div class="pill-row" id="deliveryFilterBar" style="margin:0"></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <select id="deliverySort" onchange="renderDeliveries()" style="padding:6px 10px;font-size:12.5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+              <option value="date-desc">Дата ↓ (новые)</option>
+              <option value="date-asc">Дата ↑ (старые)</option>
+              <option value="qty-desc">Количество ↓</option>
+              <option value="qty-asc">Количество ↑</option>
+            </select>
+            <div class="pill-row" id="deliveryFilterBar" style="margin:0"></div>
+          </div>
         </div>
         <div id="deliveryList"></div>
       </div>
@@ -468,6 +495,12 @@
           <input type="date" id="res-date-filter" onchange="renderReservations()" style="padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
           <button class="btn btn-ghost btn-sm hidden" id="resDateClearBtn" onclick="clearResDateFilter()">✕ Clear date</button>
           <span id="resDateCount" style="font-size:12px;color:var(--text-2)"></span>
+          <select id="resSort" onchange="renderReservations()" style="margin-left:auto;padding:6px 10px;font-size:12.5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+            <option value="date-desc">Дата ↓ (новые)</option>
+            <option value="date-asc">Дата ↑ (старые)</option>
+            <option value="qty-desc">Количество ↓</option>
+            <option value="qty-asc">Количество ↑</option>
+          </select>
         </div>
         <div id="resList"></div>
       </div>
@@ -568,8 +601,14 @@
       <div style="margin-bottom:10px"><input id="productsSearch" placeholder="🔍 Поиск..." oninput="renderProducts()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
       <div class="card" style="padding:0;overflow-x:auto">
         <table id="productsTable" class="products-table"><thead><tr>
-          <th>Product Name</th><th>Type</th><th>Width (cm)</th><th>Ply</th><th>GSM</th><th>Balance</th>
-          <th>Weighted Daily</th><th>Manual Monthly (m)</th><th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col">Action</th>
+          <th onclick="setProdSort('name')" style="cursor:pointer">Product Name</th>
+          <th onclick="setProdSort('type')" style="cursor:pointer">Type</th>
+          <th onclick="setProdSort('width')" style="cursor:pointer">Width (cm)</th>
+          <th>Ply</th><th>GSM</th>
+          <th onclick="setProdSort('balance')" style="cursor:pointer">Balance</th>
+          <th onclick="setProdSort('weighted')" style="cursor:pointer">Weighted Daily</th>
+          <th onclick="setProdSort('manual')" style="cursor:pointer">Manual Monthly (m)</th>
+          <th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col">Action</th>
         </tr></thead><tbody></tbody></table>
       </div>
     </div>
@@ -600,7 +639,13 @@
         <div class="auth-error" id="nsError"></div>
       </div>
 
-      <div style="margin-bottom:10px"><input id="suppliersSearch" placeholder="🔍 Search..." oninput="renderSuppliers()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
+      <div style="margin-bottom:10px"><input id="suppliersSearch" placeholder="🔍 Search..." oninput="renderSuppliers()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:200px">
+        <select id="suppliersSort" onchange="renderSuppliers()" style="margin-left:8px;padding:8px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+          <option value="">Сортировка: по умолчанию</option>
+          <option value="name-asc">Название А→Я</option>
+          <option value="name-desc">Название Я→А</option>
+        </select>
+      </div>
 
       <div class="card-title" style="margin-bottom:10px">Supplier list</div>
       <div id="supplierList"></div>
