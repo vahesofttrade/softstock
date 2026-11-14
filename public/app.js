@@ -157,14 +157,21 @@ async function loadDeliveries(){
 async function loadStockLog(){
   // wide enough to cover Jan 1 of the current year, for the monthly overview
   const since = new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0,10);
-  const { data, error } = await sb.from('stock_log')
-    .select('*, products(name,type)')
-    .gte('date', since)
-    .order('date',{ascending:false})
-    .order('created_at',{ascending:false})
-    .limit(5000);
-  if(error){ toast('Ошибка загрузки истории: '+error.message, true); return; }
-  stockLog = data||[];
+  // Supabase returns at most 1000 rows per request, so read the year page by page
+  const PAGE = 1000, all = [];
+  for(let from = 0; from < 50000; from += PAGE){
+    const { data, error } = await sb.from('stock_log')
+      .select('*, products(name,type)')
+      .gte('date', since)
+      .order('date',{ascending:false})
+      .order('created_at',{ascending:false})
+      .order('id',{ascending:false})
+      .range(from, from + PAGE - 1);
+    if(error){ toast('Ошибка загрузки истории: '+error.message, true); return; }
+    all.push(...(data||[]));
+    if(!data || data.length < PAGE) break;
+  }
+  stockLog = all;
 }
 
 // ---------------------------------------------------------------
@@ -185,7 +192,7 @@ function toast(msg, isError){
   el.className = 'toast'+(isError?' err':'');
   el.textContent = msg;
   document.getElementById('toastHost').appendChild(el);
-  setTimeout(()=>el.remove(), 3500);
+  setTimeout(()=>el.remove(), isError ? 8000 : 3500);
 }
 function productLabel(p){ return p.name+' · '+(p.width_cm||'—')+'cm·'+p.ply+'ply·'+(p.gsm||'—')+'gsm'; }
 
@@ -2271,12 +2278,12 @@ async function scannerConfirm(){
 
   const btn = document.getElementById('scannerConfirmBtn');
   btn.disabled = true; btn.textContent = '⏳ Добавление…';
-  let added=0, failed=0;
+  let added=0, failed=0; const errs=[];
   for(const line of selected){
     try{
       let pid = line.matchedProductId;
       if(!pid){
-        if(!line.type){ failed++; continue; }
+        if(!line.type){ failed++; errs.push((line.name_original||'строка')+': не выбран тип'); continue; }
         const { data, error } = await sb.from('products').insert({
           name: line.name_original || 'Scanned product', type: line.type,
           width_cm: parseFloat(line.width)||null, ply: parseInt(line.layers)||1, gsm: parseFloat(line.gsm)||null
@@ -2286,17 +2293,19 @@ async function scannerConfirm(){
         products.push(data);
       }
       const qty = parseFloat(line.qtyKg)||0;
-      if(!(qty>0)) { failed++; continue; }
+      if(!(qty>0)) { failed++; errs.push((line.name_original||'строка')+': не указано количество (кг)'); continue; }
       const { error: e2 } = await sb.from('deliveries').insert({
-        product_id: pid, supplier_id: line.supplier_id||globalSupplier||null, quantity: qty, unit:'kg',
+        product_id: pid, supplier_id: line.supplier_id||globalSupplier||null, quantity: qty,
         plate_no: line.plate||globalPlate||'', expected_date: globalDate, status:'pending'
       });
       if(e2) throw e2;
       added++;
-    }catch(e){ failed++; }
+    }catch(e){ failed++; errs.push((line.name_original||'строка')+': '+(e.message||e)); }
   }
   btn.disabled = false;
-  toast('✅ Добавлено поставок: '+added+(failed?' · ошибок: '+failed:''), added===0);
+  btn.textContent = '✅ Добавить '+scannerLines.filter(l=>l.selected).length+' строк в поставки';
+  toast((added?'✅ ':'⚠️ ')+'Добавлено поставок: '+added+(failed?' · ошибок: '+failed+' — '+errs.slice(0,2).join('; '):''), added===0);
+  if(errs.length) console.warn('Scanner errors:', errs);
   if(added>0){
     await Promise.all([loadDeliveries(), loadProducts()]);
     fillProductSelects(); renderProducts(); renderLevels(); renderOrders();
