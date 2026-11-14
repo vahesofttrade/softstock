@@ -66,13 +66,25 @@ sb.auth.onAuthStateChange(async (_event, session)=>{
     document.getElementById('app').classList.remove('hidden');
     document.getElementById('whoName').textContent = myProfile?.full_name || me.email;
     document.getElementById('whoRole').textContent = roleLabel(myProfile?.role);
+    applyRoleNav();
     await refreshAll();
+    if(myProfile?.role==='restricted') showPane('reservations');
   } else {
     me = null; myProfile = null;
     document.getElementById('app').classList.add('hidden');
     document.getElementById('authScreen').classList.remove('hidden');
   }
 });
+
+const RESTRICTED_PAGES = ['reservations','levels','deliveries'];
+
+function applyRoleNav(){
+  const restricted = myProfile?.role==='restricted';
+  document.querySelectorAll('.nav-item').forEach(el=>{
+    el.style.display = (!restricted || RESTRICTED_PAGES.includes(el.dataset.pane)) ? '' : 'none';
+  });
+  document.querySelectorAll('.nav-group-label').forEach(el=>{ el.style.display = restricted ? 'none' : ''; });
+}
 
 function roleLabel(r){
   return r==='admin' ? '👑 Администратор' : r==='restricted' ? '👁 Только просмотр' : '👤 Пользователь';
@@ -89,12 +101,23 @@ function canEdit(){ return myProfile && myProfile.role !== 'restricted'; }
 // NAV
 // ---------------------------------------------------------------
 function showPane(name){
+  if(myProfile?.role==='restricted' && !RESTRICTED_PAGES.includes(name)) name = 'reservations';
   document.querySelectorAll('.pane').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n=>n.classList.remove('active'));
   document.getElementById('pane-'+name).classList.add('active');
   document.querySelector('.nav-item[data-pane="'+name+'"]').classList.add('active');
+  document.querySelector('.main')?.scrollTo(0,0);
+  if(window.innerWidth<=820) toggleSidebar(false);
 }
 
+function toggleSidebar(force){
+  const sb = document.getElementById('appSidebar');
+  const ov = document.getElementById('sidebarOverlay');
+  if(!sb) return;
+  const open = typeof force==='boolean' ? force : !sb.classList.contains('open');
+  sb.classList.toggle('open', open);
+  ov?.classList.toggle('show', open);
+}
 // ---------------------------------------------------------------
 // DATA LOADING
 // ---------------------------------------------------------------
@@ -134,14 +157,21 @@ async function loadDeliveries(){
 async function loadStockLog(){
   // wide enough to cover Jan 1 of the current year, for the monthly overview
   const since = new Date(new Date().getFullYear(), 0, 1).toISOString().slice(0,10);
-  const { data, error } = await sb.from('stock_log')
-    .select('*, products(name,type)')
-    .gte('date', since)
-    .order('date',{ascending:false})
-    .order('created_at',{ascending:false})
-    .limit(5000);
-  if(error){ toast('Ошибка загрузки истории: '+error.message, true); return; }
-  stockLog = data||[];
+  // Supabase returns at most 1000 rows per request, so read the year page by page
+  const PAGE = 1000, all = [];
+  for(let from = 0; from < 50000; from += PAGE){
+    const { data, error } = await sb.from('stock_log')
+      .select('*, products(name,type)')
+      .gte('date', since)
+      .order('date',{ascending:false})
+      .order('created_at',{ascending:false})
+      .order('id',{ascending:false})
+      .range(from, from + PAGE - 1);
+    if(error){ toast('Ошибка загрузки истории: '+error.message, true); return; }
+    all.push(...(data||[]));
+    if(!data || data.length < PAGE) break;
+  }
+  stockLog = all;
 }
 
 // ---------------------------------------------------------------
@@ -151,6 +181,12 @@ function todayISO(){ return new Date().toISOString().slice(0,10); }
 function daysAgoISO(n){ const d=new Date(); d.setDate(d.getDate()-n); return d.toISOString().slice(0,10); }
 function firstOfMonthISO(){ const d=new Date(); d.setDate(1); return d.toISOString().slice(0,10); }
 function fmt(n){ return Math.round((n||0)*10)/10; }
+// Formats a kg quantity, adding a tonnes hint for large totals: "12,345.6 кг (12.3 т)"
+function fmtKgT(kg){
+  const v = fmt(kg);
+  const txt = v.toLocaleString()+' кг';
+  return Math.abs(v)>=1000 ? txt+' <span style="opacity:.65;font-weight:400">('+(v/1000).toLocaleString(undefined,{maximumFractionDigits:2})+' т)</span>' : txt;
+}
 function toast(msg, isError){
   const el = document.createElement('div');
   el.className = 'toast'+(isError?' err':'');
@@ -384,7 +420,7 @@ function renderChartByType(){
     options: {
       onClick:(evt, els)=>{ if(els.length){ ceShowProducts(labels[els[0].index]); } },
       onHover:(evt, els)=>{ evt.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
-      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>c.parsed.y.toLocaleString()+' м/день — нажмите для товаров'}} },
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c=>c.parsed.y.toLocaleString()+' кг/день — нажмите для товаров'}} },
       scales:{ y:{ beginAtZero:true, grid:{color:'#EEF0ED'} }, x:{ grid:{display:false} } },
       maintainAspectRatio:false
     }
@@ -409,7 +445,7 @@ function ceShowProducts(type){
       indexAxis:'y',
       onClick:(evt, els)=>{ if(els.length){ ceShowProductDetail(ceProdList[els[0].index].p); } },
       onHover:(evt, els)=>{ evt.native.target.style.cursor = els.length ? 'pointer' : 'default'; },
-      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c2=>c2.parsed.x.toLocaleString()+' м/день — нажмите для истории'}} },
+      plugins:{ legend:{display:false}, tooltip:{callbacks:{label:c2=>c2.parsed.x.toLocaleString()+' кг/день — нажмите для истории'}} },
       scales:{ x:{ beginAtZero:true, grid:{color:'#EEF0ED'} }, y:{ grid:{display:false} } },
       maintainAspectRatio:false
     }
@@ -432,7 +468,7 @@ function ceShowProductDetail(p){
     chartByTypeInst = new Chart(ctx, {
       data:{ labels: days.map(d=>d.date.slice(5)), datasets:[
         { type:'bar', label:'Расход', data: vals, backgroundColor:c, borderRadius:3 },
-        { type:'line', label:'Среднее '+fmt(avg).toLocaleString()+' м/д', data: days.map(()=>Math.round(avg)), borderColor:'#D98F2B', borderDash:[5,4], pointRadius:0, borderWidth:1.5 }
+        { type:'line', label:'Среднее '+fmt(avg).toLocaleString()+' кг/д', data: days.map(()=>Math.round(avg)), borderColor:'#D98F2B', borderDash:[5,4], pointRadius:0, borderWidth:1.5 }
       ]},
       options:{ plugins:{ legend:{display:true, labels:{boxWidth:10,font:{size:11}}} },
         scales:{ y:{ beginAtZero:true, grid:{color:'#EEF0ED'} }, x:{ grid:{display:false} } },
@@ -464,10 +500,10 @@ function openProductInExplorer(pid){
 
 // ---------- KPI drill-down modal: metric -> types -> products ----------
 const KPI_META = {
-  today:     { title:'📅 Сегодня', unit:'м',     crumb:'расход сегодня, по типам' },
-  avgDaily:  { title:'📈 Средний расход/день', unit:'м/день', crumb:'за 30 дней, по типам' },
-  mtd:       { title:'📦 Расход с начала месяца', unit:'м', crumb:'с начала месяца, по типам' },
-  lastMonth: { title:'📦 Итог за прошлый месяц', unit:'м', crumb:'предыдущий календарный месяц, по типам' }
+  today:     { title:'📅 Сегодня', unit:'кг',     crumb:'расход сегодня, по типам' },
+  avgDaily:  { title:'📈 Средний расход/день', unit:'кг/день', crumb:'за 30 дней, по типам' },
+  mtd:       { title:'📦 Расход с начала месяца', unit:'кг', crumb:'с начала месяца, по типам' },
+  lastMonth: { title:'📦 Итог за прошлый месяц', unit:'кг', crumb:'предыдущий календарный месяц, по типам' }
 };
 
 function kpiByProductMap(metric){
@@ -592,13 +628,13 @@ function dayDrillTypes(){
   const body = document.getElementById('kpiDrillBody');
   if(!entries.length){ body.innerHTML = '<div class="empty">Нет расхода за этот день</div>'; return; }
   const total = entries.reduce((s,[,v])=>s+v,0);
-  body.innerHTML = `<div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Всего: <b style="color:var(--text)">${fmt(total).toLocaleString()} м</b></div>` +
+  body.innerHTML = `<div style="font-size:12px;color:var(--text-3);margin-bottom:12px">Всего: <b style="color:var(--text)">${fmt(total).toLocaleString()} кг</b></div>` +
     entries.map(([type,v])=>{
       const c = TYPE_COLOR[type]||TYPE_COLOR.Other;
       const pct = Math.round(v/total*100);
       return `<div class="type-row" style="--c:${c}" onclick="dayDrillProducts('${type}')">
         <div class="type-row-head"><span class="type-name">${type}</span>
-        <span><span class="type-val num">${fmt(v).toLocaleString()} м</span><span class="type-pct">${pct}%</span></span></div>
+        <span><span class="type-val num">${fmt(v).toLocaleString()} кг</span><span class="type-pct">${pct}%</span></span></div>
         <div class="type-bar-track"><div class="type-bar-fill" style="width:${pct}%"></div></div>
       </div>`;
     }).join('');
@@ -623,7 +659,7 @@ function dayDrillProducts(type){
     return `<div class="type-row" style="--c:${c}" onclick="openProductInExplorer(${p.id})" title="Открыть историю ${p.name} за 30 дней">
       <div class="type-row-head" style="font-size:12.5px">
         <span>${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></span>
-        <span class="num" style="font-weight:600">${fmt(v).toLocaleString()} м</span>
+        <span class="num" style="font-weight:600">${fmt(v).toLocaleString()} кг</span>
       </div>
       <div class="type-bar-track" style="height:4px;margin-top:5px"><div class="type-bar-fill" style="width:${pct}%"></div></div>
     </div>`;
@@ -699,10 +735,10 @@ function renderMonthlyOverview(){
     return `<div class="card" style="padding:10px 12px;cursor:pointer;${active?'border-color:var(--brand)':''}" onclick="toggleMonthDetail(${year},${m},'${label}')" title="Нажмите, чтобы посмотреть разбивку по типам">
       <div style="font-weight:600;font-family:'Space Grotesk',sans-serif;font-size:13px">${label}</div>
       <div style="font-size:10.5px;color:var(--text-3);margin:2px 0 6px">РАСХОД</div>
-      <div class="num" style="font-weight:600;color:var(--brand)">${fmt(consumed).toLocaleString()} м</div>
+      <div class="num" style="font-weight:600;color:var(--brand)">${fmt(consumed).toLocaleString()} кг</div>
       <div style="font-size:10.5px;color:var(--text-3);margin:6px 0 2px">ПРИХОД</div>
-      <div class="num" style="font-size:12.5px;color:var(--text-2)">${fmt(received).toLocaleString()} м</div>
-      <div style="font-size:11px;color:var(--text-3);margin-top:6px">Ø ${fmt(avgDaily).toLocaleString()} м/д</div>
+      <div class="num" style="font-size:12.5px;color:var(--text-2)">${fmt(received).toLocaleString()} кг</div>
+      <div style="font-size:11px;color:var(--text-3);margin-top:6px">Ø ${fmt(avgDaily).toLocaleString()} кг/д</div>
     </div>`;
   }).join('');
   if(openMonthDetail) renderMonthDetailPanel(openMonthDetail.year, openMonthDetail.m, openMonthDetail.label);
@@ -751,12 +787,12 @@ function renderMonthDetailPanel(year, m, label){
           <div>
             <div style="font-size:10px;color:var(--text-3);margin-bottom:3px">РАСХОД</div>
             <div class="type-bar-track"><div class="type-bar-fill" style="width:${outPct}%"></div></div>
-            <div class="num" style="font-size:12.5px;font-weight:600;margin-top:3px">${fmt(v.out).toLocaleString()} м</div>
+            <div class="num" style="font-size:12.5px;font-weight:600;margin-top:3px">${fmt(v.out).toLocaleString()} кг</div>
           </div>
           <div>
             <div style="font-size:10px;color:var(--text-3);margin-bottom:3px">ПРИХОД</div>
             <div class="type-bar-track"><div class="type-bar-fill" style="width:${inPct}%;background:var(--amber)"></div></div>
-            <div class="num" style="font-size:12.5px;font-weight:600;margin-top:3px;color:var(--amber)">${fmt(v.in).toLocaleString()} м</div>
+            <div class="num" style="font-size:12.5px;font-weight:600;margin-top:3px;color:var(--amber)">${fmt(v.in).toLocaleString()} кг</div>
           </div>
         </div>
       </div>`;
@@ -798,27 +834,37 @@ function showMonthTypeProducts(year, m, label, type){
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:5px">
         <div>
           <div class="type-bar-track" style="height:4px"><div class="type-bar-fill" style="width:${outPct}%"></div></div>
-          <div class="num" style="font-size:11px;margin-top:2px">↓ ${fmt(out).toLocaleString()} м</div>
+          <div class="num" style="font-size:11px;margin-top:2px">↓ ${fmt(out).toLocaleString()} кг</div>
         </div>
         <div>
           <div class="type-bar-track" style="height:4px"><div class="type-bar-fill" style="width:${inPct}%;background:var(--amber)"></div></div>
-          <div class="num" style="font-size:11px;margin-top:2px;color:var(--amber)">↑ ${fmt(inn).toLocaleString()} м</div>
+          <div class="num" style="font-size:11px;margin-top:2px;color:var(--amber)">↑ ${fmt(inn).toLocaleString()} кг</div>
         </div>
       </div>
     </div>`;
   }).join('');
 }
 
+let dashDetailSortCol='', dashDetailSortDir=1;
+function setDashDetailSort(col){ if(dashDetailSortCol===col) dashDetailSortDir*=-1; else { dashDetailSortCol=col; dashDetailSortDir=1; } renderDashDetail(); }
+
 function renderDashDetail(){
   const last30 = windowTotalsByProduct(30,0);
   const prev30 = windowTotalsByProduct(60,30);
   const avgByProd = avgDailyByProduct();
-  const rows = Object.entries(last30).map(([pid,v])=>{
+  let rows = Object.entries(last30).map(([pid,v])=>{
     const p = products.find(x=>x.id==pid);
     const prev = prev30[pid]||0;
     const delta = prev>0 ? Math.round((v-prev)/prev*100) : (v>0?100:0);
     return {p, v, prev, delta, daily: avgByProd[pid]||0};
-  }).filter(r=>r.p).sort((a,b)=>b.v-a.v).slice(0,15);
+  }).filter(r=>r.p);
+  if(dashDetailSortCol){
+    const key = { name:r=>r.p.name.toLowerCase(), type:r=>r.p.type, v:r=>r.v, prev:r=>r.prev, delta:r=>r.delta, daily:r=>r.daily }[dashDetailSortCol];
+    rows.sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*dashDetailSortDir; });
+  } else {
+    rows.sort((a,b)=>b.v-a.v);
+  }
+  rows = rows.slice(0,15);
 
   const tbody = document.querySelector('#dashDetailTable tbody');
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет данных</td></tr>'; return; }
@@ -832,16 +878,29 @@ function renderDashDetail(){
   </tr>`).join('');
 }
 
+let dashRecentSortCol='', dashRecentSortDir=1;
+function setDashRecentSort(col){ if(dashRecentSortCol===col) dashRecentSortDir*=-1; else { dashRecentSortCol=col; dashRecentSortDir=1; } renderDashRecent(); }
+
 function renderDashRecent(){
   const seen = new Set();
-  const rows = [];
+  let rows = [];
   for(const r of stockLog){
     if(seen.has(r.product_id)) continue;
     seen.add(r.product_id);
     rows.push(r);
-    if(rows.length>=12) break;
+    if(!dashRecentSortCol && rows.length>=12) break;
   }
   const avgByProd = avgDailyByProduct();
+  if(dashRecentSortCol){
+    const key = {
+      name:r=>(products.find(x=>x.id===r.product_id)?.name||'').toLowerCase(),
+      type:r=>products.find(x=>x.id===r.product_id)?.type||'',
+      balance:r=>Number(products.find(x=>x.id===r.product_id)?.balance||0),
+      daily:r=>avgByProd[r.product_id]||0,
+      date:r=>r.date
+    }[dashRecentSortCol];
+    rows = [...rows].sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*dashRecentSortDir; }).slice(0,15);
+  }
   const tbody = document.querySelector('#dashRecentTable tbody');
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="5" class="empty">Нет записей</td></tr>'; return; }
   tbody.innerHTML = rows.map(r=>{
@@ -868,7 +927,7 @@ function renderTypeBars(hostId, byType){
     return `<div class="type-row" style="--c:${c}" onclick="levelsTypeFilter='${type}';showPane('levels');renderLevels();">
       <div class="type-row-head">
         <span class="type-name">${type}</span>
-        <span><span class="type-val num">${fmt(val).toLocaleString()} м</span><span class="type-pct">${pct}%</span></span>
+        <span><span class="type-val num">${fmt(val).toLocaleString()} кг</span><span class="type-pct">${pct}%</span></span>
       </div>
       <div class="type-bar-track"><div class="type-bar-fill" style="width:${pct}%"></div></div>
     </div>`;
@@ -963,23 +1022,22 @@ function manualDailyRate(p){
 
 function pendingInfo(pid){
   const pend = deliveries.filter(d=>d.product_id===pid && d.status==='pending');
-  const qtyM = pend.filter(d=>d.unit!=='kg').reduce((s,d)=>s+Number(d.quantity||0),0);
-  const qtyKg = pend.filter(d=>d.unit==='kg').reduce((s,d)=>s+Number(d.quantity||0),0);
-  if(!pend.length) return {qtyM:0, qtyKg:0, eta:''};
+  const qty = pend.reduce((s,d)=>s+Number(d.quantity||0),0);
+  if(!pend.length) return {qty:0, eta:''};
   const withDate = pend.filter(d=>d.expected_date).sort((a,b)=> a.expected_date<b.expected_date?-1:1);
   let eta = '';
   if(withDate.length){
     const days = Math.round((new Date(withDate[0].expected_date)-new Date(todayISO()))/86400000);
     eta = days<0 ? `просрочено ${-days}д` : days===0 ? 'сегодня' : days===1 ? 'завтра' : `через ${days}д`;
   }
-  return {qtyM, qtyKg, eta};
+  return {qty, eta};
 }
 
 async function editManualRate(pid){
   if(!canEdit()) return;
   const p = products.find(x=>x.id===pid);
   if(!p) return;
-  const val = prompt('Ручная норма расхода, м/месяц (для товара "'+p.name+'"):', p.manual_monthly_rate||'');
+  const val = prompt('Ручная норма расхода, кг/месяц (для товара "'+p.name+'"):', p.manual_monthly_rate||'');
   if(val===null) return;
   const monthly = parseFloat(val)||0;
   const { error } = await sb.from('products').update({ manual_monthly_rate: monthly }).eq('id', pid);
@@ -991,10 +1049,10 @@ async function editManualRate(pid){
 
 function exportLevelsCsv(){
   const rows = lvlFilteredSortedRows();
-  const header = ['Товар','Тип','Ширина','Ply','GSM','Остаток(м)','Ожидается(м)','Ожидается(кг)','30д','Расход/день','Дней'];
+  const header = ['Товар','Тип','Ширина','Ply','GSM','Остаток(кг)','Ожидается(кг)','30д','Расход/день','Дней'];
   const lines = [header.join(';')];
   rows.forEach(r=>{
-    lines.push([r.p.name, r.p.type, r.p.width_cm||'', r.p.ply, r.p.gsm||'', fmt(r.balance), fmt(r.pending.qtyM), fmt(r.pending.qtyKg), fmt(r.u30), fmt(r.daily), isFinite(r.days)?fmt(r.days):'∞'].join(';'));
+    lines.push([r.p.name, r.p.type, r.p.width_cm||'', r.p.ply, r.p.gsm||'', fmt(r.balance), fmt(r.pending.qty), fmt(r.u30), fmt(r.daily), isFinite(r.days)?fmt(r.days):'∞'].join(';'));
   });
   const blob = new Blob(['\ufeff'+lines.join('\n')], {type:'text/csv;charset=utf-8'});
   const url = URL.createObjectURL(blob);
@@ -1069,7 +1127,7 @@ function renderLevels(){
   const zeroCount = summaryBase.filter(r=>r.balance===0).length;
   const lowCount = summaryBase.filter(r=>r.balance>0 && r.balance<1000).length;
   const healthyCount = summaryBase.filter(r=>r.balance>=1000).length;
-  document.getElementById('lvlTotalStock').textContent = fmt(totalStock).toLocaleString()+' м';
+  document.getElementById('lvlTotalStock').innerHTML = fmtKgT(totalStock);
   document.getElementById('lvlTotalSub').textContent = summaryBase.length+' SKU · сброс фильтра';
   document.getElementById('lvlZeroCount').textContent = zeroCount;
   document.getElementById('lvlLowCount').textContent = lowCount;
@@ -1086,7 +1144,7 @@ function renderLevels(){
     const pct = Math.round(v/maxType*100);
     return `<div class="card" style="padding:10px 12px;cursor:pointer" onclick="levelsTypeFilter='${type}';renderLevels();">
       <div style="display:inline-block;background:${c}22;color:${c};font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;margin-bottom:6px">${type}</div>
-      <div class="num" style="font-size:15px;font-weight:700">${fmt(v).toLocaleString()} м</div>
+      <div class="num" style="font-size:15px;font-weight:700">${fmtKgT(v)}</div>
       <div style="font-size:10.5px;color:var(--text-3);margin-bottom:6px">${count} товаров</div>
       <div class="type-bar-track" style="height:4px"><div class="type-bar-fill" style="width:${pct}%;background:${c}"></div></div>
     </div>`;
@@ -1110,11 +1168,8 @@ function renderLevels(){
     const daysText = balance===0 ? '0д' : !isFinite(days) ? '∞' : Math.floor(days)+'д';
     const levelPct = !isFinite(days) ? 100 : Math.min(100, Math.round(days/90*100));
     const levelColor = balance===0 ? 'var(--red)' : days<7 ? 'var(--red)' : days<30 ? 'var(--amber)' : 'var(--green)';
-    const pendingCell = (pending.qtyM>0||pending.qtyKg>0)
-      ? [
-          pending.qtyM>0 ? `<span class="num" style="color:var(--brand);font-weight:600">+${fmt(pending.qtyM).toLocaleString()} м</span>` : '',
-          pending.qtyKg>0 ? `<span class="num" style="color:var(--amber);font-weight:600">+${fmt(pending.qtyKg).toLocaleString()} кг</span>` : ''
-        ].filter(Boolean).join('<br>') + (pending.eta?`<div style="font-size:10px;color:var(--text-3)">${pending.eta}</div>`:'')
+    const pendingCell = pending.qty>0
+      ? `<span class="num" style="color:var(--brand);font-weight:600">+${fmt(pending.qty).toLocaleString()} кг</span>${pending.eta?`<div style="font-size:10px;color:var(--text-3)">${pending.eta}</div>`:''}`
       : '—';
     const dailyCell = usedManual
       ? `${fmt(daily).toLocaleString()} <a href="#" onclick="event.preventDefault();editManualRate(${p.id})" title="Изменить ручную норму">✏️</a>`
@@ -1137,12 +1192,21 @@ function renderLevels(){
 // ---------------------------------------------------------------
 // HISTORY
 // ---------------------------------------------------------------
+let histSortCol='', histSortDir=1;
+function setHistSort(col){ if(histSortCol===col) histSortDir*=-1; else { histSortCol=col; histSortDir=1; } renderHistory(); }
+
 function renderHistory(){
   const search = (document.getElementById('historySearch')?.value||'').toLowerCase();
   const tbody = document.querySelector('#historyTable tbody');
   let rows = stockLog;
   if(search) rows = rows.filter(r=> (r.products?.name||'').toLowerCase().includes(search) || (r.products?.type||'').toLowerCase().includes(search) || (r.note||'').toLowerCase().includes(search));
-  rows = rows.slice(0,60);
+  if(histSortCol){
+    const key = { date:r=>r.date, product:r=>(r.products?.name||'').toLowerCase(), op:r=>r.operation, qty:r=>Number(r.quantity) }[histSortCol];
+    if(key) rows = [...rows].sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*histSortDir; });
+  } else {
+    rows = rows.slice(0,60);
+  }
+  if(histSortCol) rows = rows.slice(0,200);
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет записей</td></tr>'; return; }
   const opLabel = {add:'Приход +', deduct:'Расход −', update:'Установлено ='};
   tbody.innerHTML = rows.map(r=>`<tr>
@@ -1170,7 +1234,7 @@ function onForecastMethodChange(){
   lblW.style.color = isManual ? 'var(--text-3)' : 'var(--brand)'; lblW.style.fontWeight = isManual ? 500 : 700;
   lblM.style.color = isManual ? 'var(--brand)' : 'var(--text-3)'; lblM.style.fontWeight = isManual ? 700 : 500;
   document.getElementById('forecastMethodDesc').innerHTML = isManual
-    ? 'Используется <b>ручная норма</b> (м/мес ÷ 30), при отсутствии — взвешенное среднее.'
+    ? 'Используется <b>ручная норма</b> (кг/мес ÷ 30), при отсутствии — взвешенное среднее.'
     : 'Используется <b>взвешенное среднее</b> (70% посл. 30д + 30% за всё время).';
   document.getElementById('forecastMethodBanner').style.background = isManual ? 'var(--brand-light)' : '#EFF6FF';
   document.getElementById('forecastMethodBanner').style.borderColor = isManual ? 'var(--brand)' : '#93c5fd';
@@ -1290,18 +1354,17 @@ function renderForecast(){
     const cards = group.items.map(r=>{
       const p = r.p, s = US[r.urgency];
       const isManualFallback = forecastMethod==='manual' && r.rateLabel==='weighted*';
-      const pendM = deliveries.filter(d=>d.product_id===p.id && d.status==='pending' && d.unit!=='kg');
-      const pendKg = deliveries.filter(d=>d.product_id===p.id && d.status==='pending' && d.unit==='kg');
-      const totalPendM = pendM.reduce((s,d)=>s+Number(d.quantity||0),0);
+      const pend = deliveries.filter(d=>d.product_id===p.id && d.status==='pending');
+      const totalPend = pend.reduce((s,d)=>s+Number(d.quantity||0),0);
       let daysWithDelivery = null;
-      if(totalPendM>0 && r.rate>0 && r.daysLeft!=null) daysWithDelivery = Math.floor((r.balance+totalPendM)/r.rate);
-      const hasPending = pendM.length>0 || pendKg.length>0;
+      if(totalPend>0 && r.rate>0 && r.daysLeft!=null) daysWithDelivery = Math.floor((r.balance+totalPend)/r.rate);
+      const hasPending = pend.length>0;
       const dot = p.priority==='high'?'🔴 ':p.priority==='medium'?'🟠 ':p.priority==='low'?'⚪ ':'';
       const deliverySection = hasPending ? `<div style="background:#EFF6FF;border:1px solid #93c5fd;border-radius:var(--radius-sm);padding:8px 10px;margin-top:2px">
           <div style="font-size:10px;font-weight:700;color:#1d4ed8;margin-bottom:4px">🚚 Ожидаемые поставки</div>
           <div style="display:flex;flex-direction:column;gap:3px">
-            ${[...pendM,...pendKg].map(d=>`<div style="display:flex;align-items:center;justify-content:space-between;font-size:11px">
-              <span style="color:#1d4ed8;font-weight:600">+${fmt(d.quantity).toLocaleString()} ${d.unit==='kg'?'кг':'м'}</span>
+            ${pend.map(d=>`<div style="display:flex;align-items:center;justify-content:space-between;font-size:11px">
+              <span style="color:#1d4ed8;font-weight:600">+${fmt(d.quantity).toLocaleString()} кг</span>
               <span style="color:var(--text-2)">${d.expected_date||''}</span>
             </div>`).join('')}
           </div>
@@ -1325,8 +1388,8 @@ function renderForecast(){
           ${r.rateLabel==='manual'?`<span style="font-size:10px;color:var(--brand-dark);padding:2px 8px;background:var(--brand-light);border-radius:99px;border:1px solid var(--brand)">✏️ ручная</span>`:''}
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
-          <div class="fc-box"><div class="fc-box-lbl">📦 Остаток</div><div class="fc-box-val">${fmt(r.balance).toLocaleString()} м</div></div>
-          <div class="fc-box"><div class="fc-box-lbl">📉 В день</div><div class="fc-box-val">${r.rate>0?fmt(r.rate).toLocaleString()+' м/д':'—'}${p.manual_monthly_rate>0?`<div style="font-size:9px;color:var(--text-2)">${fmt(p.manual_monthly_rate).toLocaleString()} м/мес</div>`:''}</div></div>
+          <div class="fc-box"><div class="fc-box-lbl">📦 Остаток</div><div class="fc-box-val">${fmtKgT(r.balance)}</div></div>
+          <div class="fc-box"><div class="fc-box-lbl">📉 В день</div><div class="fc-box-val">${r.rate>0?fmt(r.rate).toLocaleString()+' кг/д':'—'}${p.manual_monthly_rate>0?`<div style="font-size:9px;color:var(--text-2)">${fmt(p.manual_monthly_rate).toLocaleString()} кг/мес</div>`:''}</div></div>
           <div class="fc-box"><div class="fc-box-lbl">🏁 Кончится</div><div class="fc-box-val" style="color:${s.dot}">${r.runOutDate}</div></div>
           <div class="fc-box"><div class="fc-box-lbl">🛒 Заказать до</div><div class="fc-box-val" style="color:var(--amber)">${r.orderByDate}</div></div>
         </div>
@@ -1380,7 +1443,7 @@ function fillOrderSupplierOptions(){
 function buildOrderRows(){
   const avgByProd = avgDailyByProduct();
   const pendingByProduct = {};
-  deliveries.filter(d=>d.status==='pending' && d.unit!=='kg').forEach(d=>{
+  deliveries.filter(d=>d.status==='pending').forEach(d=>{
     pendingByProduct[d.product_id] = (pendingByProduct[d.product_id]||0) + Number(d.quantity);
   });
   return products.map(p=>{
@@ -1509,9 +1572,9 @@ function orderRowHtml(r){
     <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}${p.balance==0?' <span class="badge badge-critical" style="margin-left:2px">ZERO</span>':''}</td>
     <td class="num" style="font-weight:600;color:${daysColor}">${r.daysLeft==null?'<span style="color:var(--text-3);font-weight:400">∞</span>':r.daysLeft+'d'}${urgent?' 🚨':''}</td>
     <td class="num" style="color:var(--brand)">${r.pending>0?'+'+fmt(r.pending).toLocaleString():'—'}</td>
-    <td class="num" style="color:var(--text-2)">${r.monthly>0?fmt(r.monthly).toLocaleString()+' m':'—'}</td>
-    <td class="num">${r.targetQty>0?fmt(r.targetQty).toLocaleString()+' m<div style="font-size:9px;color:var(--text-3)">'+r.targetMonths+'mo</div>':'—'}</td>
-    <td class="num" style="font-weight:600;color:${r.suggested>0?'var(--red)':'var(--green)'}">${r.suggested>0?fmt(r.suggested).toLocaleString()+' m':'✓'}</td>
+    <td class="num" style="color:var(--text-2)">${r.monthly>0?fmt(r.monthly).toLocaleString()+' kg':'—'}</td>
+    <td class="num">${r.targetQty>0?fmt(r.targetQty).toLocaleString()+' kg<div style="font-size:9px;color:var(--text-3)">'+r.targetMonths+'mo</div>':'—'}</td>
+    <td class="num" style="font-weight:600;color:${r.suggested>0?'var(--red)':'var(--green)'}">${r.suggested>0?fmt(r.suggested).toLocaleString()+' kg':'✓'}</td>
     <td><input type="number" class="ord-qty" data-pid="${p.id}" value="${qty}" min="0" step="500" placeholder="0" oninput="onOrderQtyInput(${p.id},this)" style="width:90px;padding:6px 8px;font-size:12.5px;border:1.5px solid ${qty?'var(--brand)':'var(--border)'};border-radius:var(--radius-sm);background:${qty?'var(--brand-light)':'var(--surface)'};color:var(--text);outline:none;font-weight:${qty?600:400}"></td>
     <td><select class="ord-sup" data-pid="${p.id}" onchange="onOrderSupInput(${p.id},this)" style="padding:6px 8px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none"><option value="">—</option>${suppliers.map(s=>`<option value="${s.id}" ${String(sup)===String(s.id)?'selected':''}>${s.name}</option>`).join('')}</select></td>
     <td>${statusHtml}</td>
@@ -1550,7 +1613,7 @@ function renderOrderTable(rows){
       return `<div style="margin-bottom:16px">
         <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm) var(--radius-sm) 0 0">
           <span style="font-size:13px;font-weight:700;color:var(--brand-dark)">🏭 ${supName}</span>
-          <span style="font-size:11px;color:var(--brand-dark)">${grp.length} items · ${fmt(total).toLocaleString()} m total</span>
+          <span style="font-size:11px;color:var(--brand-dark)">${grp.length} items · ${fmt(total).toLocaleString()} kg total</span>
         </div>
         <table style="border:1px solid var(--border);border-top:none;border-radius:0 0 var(--radius-sm) var(--radius-sm)"><thead>${header}</thead><tbody>${grp.map(orderRowHtml).join('')}</tbody></table>
       </div>`;
@@ -1581,10 +1644,10 @@ function updateOrderSummary(){
   const totalQty = entries.reduce((s,[,v])=>s+Number(v),0);
   const supSet = new Set(entries.map(([pid])=>orderSupMap[pid]).filter(Boolean));
   const bar = document.getElementById('orderSummaryBar');
-  document.getElementById('orderTotalQty').textContent = fmt(totalQty).toLocaleString()+' m';
+  document.getElementById('orderTotalQty').textContent = fmt(totalQty).toLocaleString()+' kg';
   document.getElementById('orderLineCount').textContent = entries.length;
   document.getElementById('orderSupplierCount').textContent = supSet.size;
-  document.getElementById('orderTotalKg').textContent = fmt(totalQty).toLocaleString()+' kg';
+  document.getElementById('orderTotalKg').textContent = (totalQty/1000).toLocaleString(undefined,{maximumFractionDigits:2})+' t';
   bar.classList.toggle('hidden', entries.length===0);
 }
 
@@ -1645,7 +1708,7 @@ function exportOrderExcelBySupplier(){
   const entries = Object.entries(orderQtyMap).filter(([,v])=>v>0);
   if(!entries.length){ toast('Нечего заказывать', true); return; }
   const rows = buildOrderRows();
-  const lines = [['Supplier','Product','Type','Width','Ply','GSM','Order Qty (m)'].join(';')];
+  const lines = [['Supplier','Product','Type','Width','Ply','GSM','Order Qty (kg)'].join(';')];
   entries.forEach(([pid,qty])=>{
     const r = rows.find(x=>String(x.p.id)===String(pid)); if(!r) return;
     const supId = orderSupMap[pid];
@@ -1679,7 +1742,7 @@ async function submitDelivery(){
   if(!product_id){ err.textContent='Выберите товар.'; return; }
   if(!(quantity>0)){ err.textContent='Укажите количество.'; return; }
 
-  const { error } = await sb.from('deliveries').insert({ product_id, supplier_id, quantity, unit:'m', expected_date, plate_no });
+  const { error } = await sb.from('deliveries').insert({ product_id, supplier_id, quantity, expected_date, plate_no });
   if(error){ err.textContent = error.message; return; }
   toast('Поставка добавлена ✓');
   clearDeliveryForm();
@@ -1702,18 +1765,12 @@ async function markArrived(id){
   if(!d) return;
   const { error: e1 } = await sb.from('deliveries').update({ status:'arrived', arrived_at:new Date().toISOString() }).eq('id', id);
   if(e1){ toast(e1.message, true); return; }
-  if(d.unit==='kg'){
-    toast('Отмечено как получено. Количество в кг — добавьте на склад вручную через Stock Entry (в метрах).', true);
-    await Promise.all([loadDeliveries(), loadProducts(), loadStockLog()]);
-    renderDeliveries(); renderDashboard(); renderLevels(); renderForecast(); renderOrders();
-    return;
-  }
   const { error: e2 } = await sb.from('stock_log').insert({
     product_id: d.product_id, operation:'add', quantity: d.quantity, date: todayISO(),
     note: 'Поставка получена'+(d.plate_no?' · '+d.plate_no:''), user_id: me.id
   });
   if(e2){ toast(e2.message, true); }
-  toast('Отмечено как получено ✓');
+  toast('Отмечено как получено ✓ +'+fmt(d.quantity).toLocaleString()+' кг на склад');
   await Promise.all([loadDeliveries(), loadProducts(), loadStockLog()]);
   renderDeliveries(); renderDashboard(); renderLevels(); renderForecast(); renderOrders();
 }
@@ -1754,11 +1811,11 @@ function _delItemHtml(d){
     <div class="delivery-status ${d.status==='arrived'?'delivery-arrived':'delivery-pending'}"></div>
     <div style="flex:1;min-width:0">
       <div class="del-name">${p?p.name:'—'}${spec}</div>
-      <div class="del-meta">${d.suppliers?.name||'—'} · ${fmt(d.quantity).toLocaleString()}${d.unit==='kg'?'кг':'м'} · ${d.status==='arrived'?'✓ Arrived':'Pending'}${dateStr?' · '+dateStr:''}</div>
+      <div class="del-meta">${d.suppliers?.name||'—'} · ${fmt(d.quantity).toLocaleString()} кг · ${d.status==='arrived'?'✓ Arrived':'Pending'}${dateStr?' · '+dateStr:''}</div>
     </div>
     <div style="display:flex;gap:6px;flex-shrink:0">
       ${d.status==='pending' && canEdit() ? `<button class="btn btn-ghost btn-sm" onclick="markArrived(${d.id})">✓ Arrived</button>` : ''}
-      ${myProfile?.role==='admin' ? `<button class="btn-icon" onclick="removeDelivery(${d.id})" title="Удалить">✕</button>` : ''}
+      ${canEdit() ? `<button class="btn-icon" onclick="removeDelivery(${d.id})" title="Удалить">✕</button>` : ''}
     </div>
   </div>`;
 }
@@ -1779,19 +1836,22 @@ function renderDeliveries(){
     if(!groups[key]) groups[key] = {truck, date, items:[]};
     groups[key].items.push(d);
   });
+  const sortMode = document.getElementById('deliverySort')?.value || 'date-desc';
+  const groupQty = g => g.items.reduce((s,x)=>s+Number(x.quantity||0),0);
   const entries = Object.entries(groups).sort((a,b)=>{
+    if(sortMode==='qty-desc') return groupQty(b[1]) - groupQty(a[1]);
+    if(sortMode==='qty-asc') return groupQty(a[1]) - groupQty(b[1]);
     const da = a[1].date>'— no date —' ? a[1].date : '';
     const db = b[1].date>'— no date —' ? b[1].date : '';
-    return db.localeCompare(da);
+    return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
   });
 
   wrap.innerHTML = entries.map(([key,g])=>{
     const pending = g.items.filter(x=>x.status==='pending').length;
     const arrived = g.items.filter(x=>x.status==='arrived').length;
-    const totalM = g.items.filter(x=>x.unit!=='kg').reduce((s,x)=>s+Number(x.quantity||0),0);
-    const totalKg = g.items.filter(x=>x.unit==='kg').reduce((s,x)=>s+Number(x.quantity||0),0);
+    const totalKg = g.items.reduce((s,x)=>s+Number(x.quantity||0),0);
     const dateLbl = g.date==='— no date —' ? g.date : new Date(g.date+'T00:00:00').toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short',year:'numeric'});
-    const totalsTxt = [totalM>0?fmt(totalM).toLocaleString()+' m':'', totalKg>0?fmt(totalKg).toLocaleString()+' kg':''].filter(Boolean).join(' · ');
+    const totalsTxt = totalKg>0 ? fmt(totalKg).toLocaleString()+' kg' : '';
     const collapsed = delCollapsed[key] ? ' collapsed' : '';
     return `<div class="del-folder${collapsed}" id="delf-${key}">
       <div class="del-folder-head" onclick="toggleDelFolder('${key}')">
@@ -1834,7 +1894,7 @@ function filterResProductDropdown(){
   const sel = document.getElementById('res-product');
   const list = typeFilter ? products.filter(p=>p.type===typeFilter) : products;
   sel.innerHTML = '<option value="">— select product —</option>' +
-    list.map(p=>`<option value="${p.id}">${p.name} — ${p.width_cm||'—'}cm · ${p.ply}ply · ${p.gsm||'—'}gsm (${fmt(p.balance).toLocaleString()} m)</option>`).join('');
+    list.map(p=>`<option value="${p.id}">${p.name} — ${p.width_cm||'—'}cm · ${p.ply}ply · ${p.gsm||'—'}gsm (${fmt(p.balance).toLocaleString()} kg)</option>`).join('');
   onResProductSelect();
 }
 
@@ -1849,9 +1909,9 @@ function onResProductSelect(){
   const reserved = reservedQtyFor(p.id);
   const avail = Math.max(0, Number(p.balance) - reserved);
   info.classList.remove('hidden');
-  info.innerHTML = `📦 Stock: <b>${fmt(p.balance).toLocaleString()} m</b>` +
-    (reserved>0 ? ` · 📌 already reserved: <b style="color:var(--amber)">${fmt(reserved).toLocaleString()} m</b>` : '') +
-    ` · ✅ available: <b style="color:var(--green)">${fmt(avail).toLocaleString()} m</b>`;
+  info.innerHTML = `📦 Stock: <b>${fmt(p.balance).toLocaleString()} kg</b>` +
+    (reserved>0 ? ` · 📌 already reserved: <b style="color:var(--amber)">${fmt(reserved).toLocaleString()} kg</b>` : '') +
+    ` · ✅ available: <b style="color:var(--green)">${fmt(avail).toLocaleString()} kg</b>`;
 }
 
 function clearResForm(){
@@ -1871,7 +1931,7 @@ async function submitReservation(){
   if(!(qty>0)){ err.textContent='Укажите количество.'; return; }
   const reserved = reservedQtyFor(p.id);
   const avail = Math.max(0, Number(p.balance)-reserved);
-  if(qty>avail){ err.textContent = 'Доступно к резерву только '+fmt(avail).toLocaleString()+' м (остаток минус активные резервы).'; return; }
+  if(qty>avail){ err.textContent = 'Доступно к резерву только '+fmt(avail).toLocaleString()+' кг (остаток минус активные резервы).'; return; }
 
   const { error } = await sb.from('reservations').insert({
     product_id: p.id, date, quantity: qty,
@@ -1880,7 +1940,7 @@ async function submitReservation(){
     reserved_by: me.id, status: 'reserved'
   });
   if(error){ err.textContent = error.message; return; }
-  toast('📌 Зарезервировано '+fmt(qty).toLocaleString()+' м — ожидает подтверждения');
+  toast('📌 Зарезервировано '+fmt(qty).toLocaleString()+' кг — ожидает подтверждения');
   clearResForm();
   await loadReservations(); renderReservations(); onResProductSelect();
 }
@@ -1906,7 +1966,7 @@ function renderReservationKpis(){
   const cancelled = reservations.filter(r=>r.status==='cancelled');
   const activeTotal = active.reduce((s,r)=>s+Number(r.quantity||0),0);
   document.getElementById('resKpiActive').textContent = active.length;
-  document.getElementById('resKpiTotal').textContent = fmt(activeTotal).toLocaleString()+' m';
+  document.getElementById('resKpiTotal').innerHTML = fmtKgT(activeTotal);
   document.getElementById('resKpiConfirmed').textContent = confirmed.length;
   document.getElementById('resKpiCancelled').textContent = cancelled.length;
 }
@@ -1920,6 +1980,13 @@ function renderReservations(){
   document.getElementById('resDateClearBtn').classList.toggle('hidden', !dateF);
   if(dateF) items = items.filter(r=>r.date===dateF);
   document.getElementById('resDateCount').textContent = dateF ? items.length+' on '+dateF : '';
+  const sortMode = document.getElementById('resSort')?.value || 'date-desc';
+  items = [...items].sort((a,b)=>{
+    if(sortMode==='qty-desc') return Number(b.quantity)-Number(a.quantity);
+    if(sortMode==='qty-asc') return Number(a.quantity)-Number(b.quantity);
+    const da = a.created_at||'', db = b.created_at||'';
+    return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
+  });
 
   const wrap = document.getElementById('resList');
   if(!items.length){ wrap.innerHTML = '<div class="empty">No reservations'+(dateF?' on this date':'')+'</div>'; return; }
@@ -1944,8 +2011,8 @@ function renderReservations(){
             ${statusBadge[r.status]||''}
           </div>
           <div style="font-size:11px;color:var(--text-2)">${p?`${p.width_cm||'—'}cm · ${p.ply}ply · ${p.gsm||'—'}gsm`:''}
-            · <b style="color:var(--amber)">${fmt(r.quantity).toLocaleString()} m reserved</b>
-            ${diff?` · verified <b style="color:${Number(r.actual_qty)<Number(r.quantity)?'var(--red)':'var(--green)'}">${fmt(r.actual_qty).toLocaleString()} m</b>`:''}
+            · <b style="color:var(--amber)">${fmt(r.quantity).toLocaleString()} kg reserved</b>
+            ${diff?` · verified <b style="color:${Number(r.actual_qty)<Number(r.quantity)?'var(--red)':'var(--green)'}">${fmt(r.actual_qty).toLocaleString()} kg</b>`:''}
             ${r.destination?' · → '+r.destination:''}</div>
           <div style="font-size:10px;color:var(--text-3);margin-top:3px">📌 ${when} by ${byWho}${r.closed_at?' · '+(r.status==='confirmed'?'✅':'✕')+' '+new Date(r.closed_at).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'}):''}${r.note?' · 📝 '+r.note:''}</div>
         </div>
@@ -1964,7 +2031,7 @@ function openResConfirm(id){
   document.getElementById('rc-id').value = id;
   const p = r.products;
   document.getElementById('rc-info').innerHTML = `<b>${p?p.name:'—'}</b> · ${p?`${p.width_cm||'—'}cm · ${p.ply}ply · ${p.gsm||'—'}gsm`:''}
-    <div style="font-size:11px;color:var(--text-2);margin-top:3px">Reserved: <b style="color:var(--amber)">${fmt(r.quantity).toLocaleString()} m</b>${r.destination?' → '+r.destination:''}</div>`;
+    <div style="font-size:11px;color:var(--text-2);margin-top:3px">Reserved: <b style="color:var(--amber)">${fmt(r.quantity).toLocaleString()} kg</b>${r.destination?' → '+r.destination:''}</div>`;
   document.getElementById('rc-actual').value = r.quantity;
   document.getElementById('resConfirmModal').classList.remove('hidden');
 }
@@ -1989,7 +2056,7 @@ async function submitResConfirm(){
   if(e2) toast(e2.message, true);
 
   document.getElementById('resConfirmModal').classList.add('hidden');
-  toast('✅ Списано '+fmt(actual).toLocaleString()+' м со склада');
+  toast('✅ Списано '+fmt(actual).toLocaleString()+' кг со склада');
   await Promise.all([loadReservations(), loadProducts(), loadStockLog()]);
   renderReservations(); renderDashboard(); renderLevels(); renderForecast(); renderOrders();
 }
@@ -2301,7 +2368,7 @@ async function resRunScan(){
 function resRenderScanResults(){
   const wrap = document.getElementById('resScanResults');
   wrap.classList.remove('hidden');
-  wrap.innerHTML = `<div style="font-size:12px;color:var(--brand-dark);background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:10px">Найдено ${resScanLines.length} строк(и). Нажмите «Use», чтобы подставить товар и характеристики в форму выше — количество для резерва впишите вручную (в документе указан вес, а не метры).</div>` +
+  wrap.innerHTML = `<div style="font-size:12px;color:var(--brand-dark);background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);padding:8px 12px;margin-bottom:10px">Найдено ${resScanLines.length} строк(и). Нажмите «Use», чтобы подставить товар, характеристики и количество (кг) в форму выше — проверьте перед резервом.</div>` +
     resScanLines.map(l=>{
       const m = l.matched;
       return `<div class="card" style="padding:10px 12px;margin-bottom:7px;border-color:${m?'var(--border)':'#fcd34d'}">
@@ -2330,9 +2397,10 @@ function resUseScannedLine(id){
     document.getElementById('res-ply').value = l.layers||'';
     document.getElementById('res-gsm').value = l.gsm||'';
   }
+  if(l.net_weight_t) document.getElementById('res-qty').value = Math.round(parseFloat(l.net_weight_t)*1000);
   document.getElementById('res-note').value = '📷 scanned'+(l.net_weight_t?' · '+l.net_weight_t+'t on document':'');
   document.getElementById('resManualFormAnchor')?.scrollIntoView({behavior:'smooth', block:'center'});
-  toast(l.matched ? 'Товар подставлен — впишите количество и Reserve' : 'Товар не найден — выберите вручную из списка');
+  toast(l.matched ? 'Товар и количество подставлены — проверьте и нажмите Reserve' : 'Товар не найден — выберите вручную из списка');
 }
 
 // ---------------------------------------------------------------
@@ -2367,6 +2435,9 @@ async function deleteProduct(id){
 
 let productsTypeFilter = '';
 
+let prodSortCol='', prodSortDir=1;
+function setProdSort(col){ if(prodSortCol===col) prodSortDir*=-1; else { prodSortCol=col; prodSortDir=1; } renderProducts(); }
+
 function renderProducts(){
   const search = (document.getElementById('productsSearch')?.value||'').toLowerCase();
   document.getElementById('productsTypeFilter').innerHTML = ['',...TYPES].map(t=>{
@@ -2380,6 +2451,13 @@ function renderProducts(){
   let rows = products;
   if(productsTypeFilter) rows = rows.filter(p=>p.type===productsTypeFilter);
   if(search) rows = rows.filter(p=> p.name.toLowerCase().includes(search) || p.type.toLowerCase().includes(search));
+  if(prodSortCol){
+    const key = {
+      name:p=>p.name.toLowerCase(), type:p=>p.type, width:p=>p.width_cm||0,
+      balance:p=>Number(p.balance), weighted:p=>avgByProd[p.id]||0, manual:p=>p.manual_monthly_rate||0
+    }[prodSortCol];
+    if(key) rows = [...rows].sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*prodSortDir; });
+  }
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="13" class="empty">Ничего не найдено</td></tr>'; return; }
 
   tbody.innerHTML = rows.map(p=>{
@@ -2397,10 +2475,10 @@ function renderProducts(){
         ${TYPES.map(t=>`<option value="${t}" ${p.type===t?'selected':''}>${t}</option>`).join('')}
       </select></td>
       <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
-      <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}m</td>
-      <td class="num" style="color:var(--text-3)">${weighted>0?fmt(weighted).toLocaleString()+' m/d':'—'}</td>
+      <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}kg</td>
+      <td class="num" style="color:var(--text-3)">${weighted>0?fmt(weighted).toLocaleString()+' kg/d':'—'}</td>
       <td><input type="number" class="pr-manual-input" data-pid="${p.id}" placeholder="e.g. 3000" value="${p.manual_monthly_rate||''}" min="0" step="10"></td>
-      <td class="num" style="color:${manualDaily?'var(--brand)':'var(--text-3)'};font-weight:${manualDaily?600:400}">${manualDaily?fmt(manualDaily).toLocaleString()+' m/d':'—'}</td>
+      <td class="num" style="color:${manualDaily?'var(--brand)':'var(--text-3)'};font-weight:${manualDaily?600:400}">${manualDaily?fmt(manualDaily).toLocaleString()+' kg/d':'—'}</td>
       <td>
         <select class="pr-priority pill-select" data-pid="${p.id}" style="background-color:${prioStyle[0]};color:${prioStyle[1]}">
           <option value="" ${!p.priority?'selected':''}>— None</option>
@@ -2452,29 +2530,86 @@ async function saveProductRow(pid){
 // ---------------------------------------------------------------
 // SUPPLIERS
 // ---------------------------------------------------------------
+function refreshSuppliers(){ loadSuppliers().then(()=>{ fillSupplierSelect(); renderSuppliers(); }); }
+
 async function submitSupplier(){
   const err = document.getElementById('nsError'); err.textContent='';
   if(!canEdit()){ err.textContent='У вас нет прав на эту операцию.'; return; }
+  const editId = document.getElementById('ns-edit-id').value;
   const name = document.getElementById('ns-name').value.trim();
   const contact = document.getElementById('ns-contact').value.trim();
   const phone = document.getElementById('ns-phone').value.trim();
   const email = document.getElementById('ns-email').value.trim();
+  const notes = document.getElementById('ns-notes').value.trim();
   if(!name){ err.textContent='Укажите название.'; return; }
 
-  const { error } = await sb.from('suppliers').insert({ name, contact, phone, email });
-  if(error){ err.textContent = error.message; return; }
-  toast('Поставщик добавлен ✓');
-  ['ns-name','ns-contact','ns-phone','ns-email'].forEach(id=>document.getElementById(id).value='');
+  if(editId){
+    const { error } = await sb.from('suppliers').update({ name, contact, phone, email, notes }).eq('id', editId);
+    if(error){ err.textContent = error.message; return; }
+    toast('Поставщик обновлён ✓');
+  } else {
+    const { error } = await sb.from('suppliers').insert({ name, contact, phone, email, notes });
+    if(error){ err.textContent = error.message; return; }
+    toast('Поставщик добавлен ✓');
+  }
+  clearSupplierForm();
+  await loadSuppliers(); fillSupplierSelect(); renderSuppliers();
+}
+
+function editSupplier(id){
+  const s = suppliers.find(x=>x.id===id);
+  if(!s) return;
+  document.getElementById('ns-edit-id').value = s.id;
+  document.getElementById('ns-name').value = s.name||'';
+  document.getElementById('ns-contact').value = s.contact||'';
+  document.getElementById('ns-phone').value = s.phone||'';
+  document.getElementById('ns-email').value = s.email||'';
+  document.getElementById('ns-notes').value = s.notes||'';
+  document.getElementById('supplierFormTitle').textContent = 'Edit: '+s.name;
+  document.getElementById('supplierSubmitBtn').innerHTML = '💾 Save changes';
+  document.getElementById('pane-suppliers').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function clearSupplierForm(){
+  document.getElementById('ns-edit-id').value = '';
+  ['ns-name','ns-contact','ns-phone','ns-email','ns-notes'].forEach(id=>document.getElementById(id).value='');
+  document.getElementById('supplierFormTitle').textContent = 'Add supplier';
+  document.getElementById('supplierSubmitBtn').innerHTML = '＋ Add supplier';
+}
+
+async function deleteSupplier(id){
+  if(!confirm('Удалить этого поставщика?')) return;
+  const { error } = await sb.from('suppliers').delete().eq('id', id);
+  if(error){ toast(error.message, true); return; }
+  toast('Поставщик удалён ✓');
   await loadSuppliers(); fillSupplierSelect(); renderSuppliers();
 }
 
 function renderSuppliers(){
   const search = (document.getElementById('suppliersSearch')?.value||'').toLowerCase();
-  const tbody = document.querySelector('#suppliersTable tbody');
+  const sortMode = document.getElementById('suppliersSort')?.value||'';
+  const wrap = document.getElementById('supplierList');
   let rows = suppliers;
   if(search) rows = rows.filter(s=> s.name.toLowerCase().includes(search) || (s.contact||'').toLowerCase().includes(search) || (s.phone||'').toLowerCase().includes(search) || (s.email||'').toLowerCase().includes(search));
-  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="4" class="empty">Ничего не найдено</td></tr>'; return; }
-  tbody.innerHTML = rows.map(s=>`<tr>
-    <td>${s.name}</td><td>${s.contact||'—'}</td><td>${s.phone||'—'}</td><td>${s.email||'—'}</td>
-  </tr>`).join('');
+  if(sortMode==='name-asc') rows = [...rows].sort((a,b)=>a.name.localeCompare(b.name));
+  else if(sortMode==='name-desc') rows = [...rows].sort((a,b)=>b.name.localeCompare(a.name));
+  if(!rows.length){ wrap.innerHTML = '<div class="empty">Ничего не найдено</div>'; return; }
+  wrap.innerHTML = rows.map(s=>{
+    const metaParts = [
+      s.contact ? `👤 ${s.contact}` : '',
+      s.phone ? `📞 ${s.phone}` : '',
+      s.email ? `✉️ ${s.email}` : ''
+    ].filter(Boolean).join(' · ');
+    return `<div class="supplier-card">
+      <div class="supplier-icon">🏭</div>
+      <div style="flex:1;min-width:0">
+        <div class="supplier-name">${s.name}</div>
+        <div class="supplier-meta">${metaParts || '—'}${s.notes?`<div style="margin-top:2px;font-style:italic">${s.notes}</div>`:''}</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button class="btn-edit" onclick="editSupplier(${s.id})">✏️ Edit</button>
+        <button class="btn-icon" onclick="deleteSupplier(${s.id})" title="Удалить">✕</button>
+      </div>
+    </div>`;
+  }).join('');
 }

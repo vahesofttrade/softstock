@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SoftStock</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
@@ -41,7 +41,12 @@
 
 <!-- ===================== MAIN APP ===================== -->
 <div id="app" class="hidden">
-  <div class="sidebar">
+  <div class="mobile-topbar">
+    <button class="hamburger-btn" onclick="toggleSidebar()" aria-label="Меню">☰</button>
+    <div class="mobile-brand">Soft<span>Stock</span></div>
+  </div>
+  <div id="sidebarOverlay" onclick="toggleSidebar(false)"></div>
+  <div class="sidebar" id="appSidebar">
     <div class="brand">Soft<span>Stock</span></div>
 
     <div class="nav-group-label">Обзор</div>
@@ -79,10 +84,10 @@
       </div>
 
       <div class="grid grid-4" style="margin-bottom:16px">
-        <div class="card" style="cursor:pointer" onclick="openKpiDrill('today')" title="Разбить по типам и товарам"><div class="card-title">Сегодня</div><div class="stat-num num" id="kpiToday">—</div><div class="stat-sub" id="kpiTodaySub">расход, м · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('today')" title="Разбить по типам и товарам"><div class="card-title">Сегодня</div><div class="stat-num num" id="kpiToday">—</div><div class="stat-sub" id="kpiTodaySub">расход, кг · по типам ›</div></div>
         <div class="card" style="cursor:pointer" onclick="openKpiDrill('avgDaily')" title="Разбить по типам и товарам"><div class="card-title">Средний расход/день</div><div class="stat-num num" id="kpiAvgDaily">—</div><div class="stat-sub">за 30 дней, все типы · по типам ›</div></div>
-        <div class="card" style="cursor:pointer" onclick="openKpiDrill('mtd')" title="Разбить по типам и товарам"><div class="card-title">Расход с начала месяца</div><div class="stat-num num" id="kpiMtdUsage">—</div><div class="stat-sub" id="kpiMtdSub">м · по типам ›</div></div>
-        <div class="card" style="cursor:pointer" onclick="openKpiDrill('lastMonth')" title="Разбить по типам и товарам"><div class="card-title">Итог за прошлый месяц</div><div class="stat-num num" id="kpiLastMonth">—</div><div class="stat-sub">м · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('mtd')" title="Разбить по типам и товарам"><div class="card-title">Расход с начала месяца</div><div class="stat-num num" id="kpiMtdUsage">—</div><div class="stat-sub" id="kpiMtdSub">кг · по типам ›</div></div>
+        <div class="card" style="cursor:pointer" onclick="openKpiDrill('lastMonth')" title="Разбить по типам и товарам"><div class="card-title">Итог за прошлый месяц</div><div class="stat-num num" id="kpiLastMonth">—</div><div class="stat-sub">кг · по типам ›</div></div>
       </div>
 
       <div class="grid grid-2" style="align-items:start;margin-bottom:16px">
@@ -110,16 +115,28 @@
       <div style="margin-bottom:8px" class="card-title">🗓 Помесячная сводка</div>
       <div id="dashMonthly" class="grid" style="grid-template-columns:repeat(6,1fr);margin-bottom:10px"></div>
       <div id="dashMonthlyDetail" class="card hidden" style="margin-bottom:16px"></div>
-      <p style="font-size:12px;color:var(--text-3);margin:-10px 0 16px">Данные за январь–апрель могут быть неполными — эта история ещё не перенесена из старой базы.</p>
 
       <div class="card-title" style="margin-bottom:8px">🔎 Детально: топ расхода (30 дней)</div>
       <div class="card" style="padding:0;overflow-x:auto;margin-bottom:16px">
-        <table id="dashDetailTable"><thead><tr><th>Товар</th><th>Тип</th><th>30д</th><th>Пред. 30д</th><th>Δ</th><th>Расход/день</th></tr></thead><tbody></tbody></table>
+        <table id="dashDetailTable"><thead><tr>
+          <th onclick="setDashDetailSort('name')" style="cursor:pointer">Товар</th>
+          <th onclick="setDashDetailSort('type')" style="cursor:pointer">Тип</th>
+          <th onclick="setDashDetailSort('v')" style="cursor:pointer">30д</th>
+          <th onclick="setDashDetailSort('prev')" style="cursor:pointer">Пред. 30д</th>
+          <th onclick="setDashDetailSort('delta')" style="cursor:pointer">Δ</th>
+          <th onclick="setDashDetailSort('daily')" style="cursor:pointer">Расход/день</th>
+        </tr></thead><tbody></tbody></table>
       </div>
 
       <div class="card-title" style="margin-bottom:8px">🕐 Недавно обновлённые</div>
       <div class="card" style="padding:0;overflow-x:auto">
-        <table id="dashRecentTable"><thead><tr><th>Товар</th><th>Тип</th><th>Остаток</th><th>Расход/день</th><th>Обновлено</th></tr></thead><tbody></tbody></table>
+        <table id="dashRecentTable"><thead><tr>
+          <th onclick="setDashRecentSort('name')" style="cursor:pointer">Товар</th>
+          <th onclick="setDashRecentSort('type')" style="cursor:pointer">Тип</th>
+          <th onclick="setDashRecentSort('balance')" style="cursor:pointer">Остаток</th>
+          <th onclick="setDashRecentSort('daily')" style="cursor:pointer">Расход/день</th>
+          <th onclick="setDashRecentSort('date')" style="cursor:pointer">Обновлено</th>
+        </tr></thead><tbody></tbody></table>
       </div>
     </div>
 
@@ -140,7 +157,7 @@
           </select>
         </div>
         <div class="form-grid">
-          <div class="form-row"><label>Количество (м)</label><input type="number" id="se-qty" step="0.1" min="0"></div>
+          <div class="form-row"><label>Количество (кг)</label><input type="number" id="se-qty" step="0.1" min="0"></div>
           <div class="form-row"><label>Дата</label><input type="date" id="se-date"></div>
         </div>
         <div class="form-row"><label>Примечание</label><input type="text" id="se-note" placeholder="необязательно"></div>
@@ -196,8 +213,8 @@
             <th onclick="setLvlSort('type')" style="cursor:pointer">Тип</th>
             <th onclick="setLvlSort('width')" style="cursor:pointer">Ширина</th>
             <th>Ply</th><th>GSM</th>
-            <th onclick="setLvlSort('balance')" style="cursor:pointer">Остаток (м)</th>
-            <th style="color:var(--brand)">Ожидается</th>
+            <th onclick="setLvlSort('balance')" style="cursor:pointer">Остаток (кг)</th>
+            <th style="color:var(--brand)">Ожидается (кг)</th>
             <th onclick="setLvlSort('u30')" style="cursor:pointer">30д</th>
             <th onclick="setLvlSort('daily')" style="cursor:pointer">Расход/день</th>
             <th onclick="setLvlSort('days')" style="cursor:pointer">Дней</th>
@@ -218,7 +235,13 @@
       <div class="page-header"><h1 class="page-title">History</h1><p class="page-sub">Последние 60 операций</p></div>
       <div style="margin-bottom:10px"><input id="historySearch" placeholder="🔍 Поиск..." oninput="renderHistory()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
       <div class="card" style="padding:0;overflow-x:auto">
-        <table id="historyTable"><thead><tr><th>Дата</th><th>Товар</th><th>Операция</th><th>Кол-во (м)</th><th>Примечание</th><th>Пользователь</th></tr></thead><tbody></tbody></table>
+        <table id="historyTable"><thead><tr>
+          <th onclick="setHistSort('date')" style="cursor:pointer">Дата</th>
+          <th onclick="setHistSort('product')" style="cursor:pointer">Товар</th>
+          <th onclick="setHistSort('op')" style="cursor:pointer">Операция</th>
+          <th onclick="setHistSort('qty')" style="cursor:pointer">Кол-во (кг)</th>
+          <th>Примечание</th><th>Пользователь</th>
+        </tr></thead><tbody></tbody></table>
       </div>
     </div>
 
@@ -325,13 +348,13 @@
       </div>
 
       <div id="orderSummaryBar" class="hidden" style="display:flex;align-items:center;gap:16px;padding:12px 16px;background:var(--brand-light);border:1px solid var(--brand);border-radius:var(--radius-sm);margin-bottom:16px;flex-wrap:wrap">
-        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total to order</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalQty">0 m</div></div>
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total to order</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalQty">0 kg</div></div>
         <div style="width:1px;height:32px;background:var(--brand)"></div>
         <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Order lines</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderLineCount">0</div></div>
         <div style="width:1px;height:32px;background:var(--brand)"></div>
         <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Suppliers</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderSupplierCount">0</div></div>
         <div style="width:1px;height:32px;background:var(--brand)"></div>
-        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total weight</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalKg">0 kg</div></div>
+        <div><div style="font-size:10px;color:var(--brand-dark);text-transform:uppercase;letter-spacing:.05em;font-weight:600">Total weight (t)</div><div style="font-size:16px;font-weight:700;color:var(--brand-dark)" id="orderTotalKg">0 t</div></div>
         <div style="margin-left:auto"><button class="btn btn-ghost btn-sm" onclick="toggleGroupBySupplier()">🏭 <span id="groupBySupplierLbl">Group by supplier</span></button></div>
       </div>
 
@@ -365,7 +388,7 @@
           <div class="form-row"><label>Width (cm)</label><input type="text" id="dv-width" readonly placeholder="Auto-filled"></div>
           <div class="form-row"><label>Ply</label><input type="text" id="dv-ply" readonly placeholder="Auto-filled"></div>
           <div class="form-row"><label>GSM</label><input type="text" id="dv-gsm" readonly placeholder="Auto-filled"></div>
-          <div class="form-row"><label>Quantity (m)</label><input type="number" id="dv-qty" min="0" step="0.1" placeholder="e.g. 10000"></div>
+          <div class="form-row"><label>Quantity (kg)</label><input type="number" id="dv-qty" min="0" step="0.1" placeholder="e.g. 10000"></div>
           <div class="form-row"><label>Plate No.</label><input type="text" id="dv-plate" placeholder="e.g. 97AP560"></div>
           <div class="form-row full"><label>Expected date</label><input type="date" id="dv-date"></div>
         </div>
@@ -378,9 +401,17 @@
       </div>
 
       <div class="card">
-        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
           <div class="card-title">Pending &amp; recent</div>
-          <div class="pill-row" id="deliveryFilterBar" style="margin:0"></div>
+          <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <select id="deliverySort" onchange="renderDeliveries()" style="padding:6px 10px;font-size:12.5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+              <option value="date-desc">Дата ↓ (новые)</option>
+              <option value="date-asc">Дата ↑ (старые)</option>
+              <option value="qty-desc">Количество ↓</option>
+              <option value="qty-asc">Количество ↑</option>
+            </select>
+            <div class="pill-row" id="deliveryFilterBar" style="margin:0"></div>
+          </div>
         </div>
         <div id="deliveryList"></div>
       </div>
@@ -441,7 +472,7 @@
           <div class="form-row"><label>Width (cm)</label><input type="text" id="res-width" placeholder="auto from product"></div>
           <div class="form-row"><label>Ply</label><input type="text" id="res-ply" placeholder="auto"></div>
           <div class="form-row"><label>GSM</label><input type="text" id="res-gsm" placeholder="auto"></div>
-          <div class="form-row"><label>Quantity (m)</label><input type="number" id="res-qty" placeholder="e.g. 5000" min="0" step="0.1"></div>
+          <div class="form-row"><label>Quantity (kg)</label><input type="number" id="res-qty" placeholder="e.g. 5000" min="0" step="0.1"></div>
           <div class="form-row full"><label>Destination</label><input id="res-dest" list="res-dest-list" placeholder="e.g. Wet Wipes Production"><datalist id="res-dest-list"><option value="Wet Wipes Production"><option value="Facial Tissue Production"><option value="Napkins Production"><option value="Toilet Paper Production"><option value="Other"></datalist></div>
           <div class="form-row full"><label>Note</label><input id="res-note" placeholder="optional"></div>
         </div>
@@ -463,6 +494,12 @@
           <input type="date" id="res-date-filter" onchange="renderReservations()" style="padding:6px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
           <button class="btn btn-ghost btn-sm hidden" id="resDateClearBtn" onclick="clearResDateFilter()">✕ Clear date</button>
           <span id="resDateCount" style="font-size:12px;color:var(--text-2)"></span>
+          <select id="resSort" onchange="renderReservations()" style="margin-left:auto;padding:6px 10px;font-size:12.5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+            <option value="date-desc">Дата ↓ (новые)</option>
+            <option value="date-asc">Дата ↑ (старые)</option>
+            <option value="qty-desc">Количество ↓</option>
+            <option value="qty-asc">Количество ↑</option>
+          </select>
         </div>
         <div id="resList"></div>
       </div>
@@ -478,7 +515,7 @@
         <div style="padding:18px">
           <input type="hidden" id="rc-id">
           <div id="rc-info" style="background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 14px;font-size:13px;margin-bottom:14px"></div>
-          <div class="form-row"><label>Verified quantity (m)</label><input type="number" id="rc-actual" min="0" step="0.1">
+          <div class="form-row"><label>Verified quantity (kg)</label><input type="number" id="rc-actual" min="0" step="0.1">
             <div style="font-size:11px;color:var(--text-2);margin-top:4px">Adjust if the checked amount differs from reserved. This will be deducted from stock.</div>
           </div>
           <div class="btn-row">
@@ -563,34 +600,54 @@
       <div style="margin-bottom:10px"><input id="productsSearch" placeholder="🔍 Поиск..." oninput="renderProducts()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
       <div class="card" style="padding:0;overflow-x:auto">
         <table id="productsTable" class="products-table"><thead><tr>
-          <th>Product Name</th><th>Type</th><th>Width (cm)</th><th>Ply</th><th>GSM</th><th>Balance</th>
-          <th>Weighted Daily</th><th>Manual Monthly (m)</th><th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col">Action</th>
+          <th onclick="setProdSort('name')" style="cursor:pointer">Product Name</th>
+          <th onclick="setProdSort('type')" style="cursor:pointer">Type</th>
+          <th onclick="setProdSort('width')" style="cursor:pointer">Width (cm)</th>
+          <th>Ply</th><th>GSM</th>
+          <th onclick="setProdSort('balance')" style="cursor:pointer">Balance</th>
+          <th onclick="setProdSort('weighted')" style="cursor:pointer">Weighted Daily</th>
+          <th onclick="setProdSort('manual')" style="cursor:pointer">Manual Monthly (kg)</th>
+          <th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col">Action</th>
         </tr></thead><tbody></tbody></table>
       </div>
     </div>
 
     <!-- SUPPLIERS -->
     <div class="pane" id="pane-suppliers">
-      <div class="page-header"><h1 class="page-title">Suppliers</h1><p class="page-sub">Контакты поставщиков</p></div>
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div><h1 class="page-title">Suppliers</h1><p class="page-sub">Manage supplier contacts</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="refreshSuppliers()">↻</button>
+      </div>
 
-      <div class="card" style="max-width:460px;margin-bottom:20px">
-        <div class="card-title">Новый поставщик</div>
-        <div class="form-row"><label>Название *</label><input type="text" id="ns-name"></div>
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title" style="margin-bottom:12px" id="supplierFormTitle">Add supplier</div>
+        <input type="hidden" id="ns-edit-id">
         <div class="form-grid">
-          <div class="form-row"><label>Контакт</label><input type="text" id="ns-contact"></div>
-          <div class="form-row"><label>Телефон</label><input type="text" id="ns-phone"></div>
+          <div class="form-row"><label>Name *</label><input type="text" id="ns-name" placeholder="e.g. ARXBUM LLC"></div>
+          <div class="form-row"><label>Contact</label><input type="text" id="ns-contact"></div>
         </div>
-        <div class="form-row"><label>Email</label><input type="email" id="ns-email"></div>
+        <div class="form-grid">
+          <div class="form-row"><label>Phone</label><input type="text" id="ns-phone" placeholder="+374..."></div>
+          <div class="form-row"><label>Email</label><input type="email" id="ns-email"></div>
+        </div>
+        <div class="form-row"><label>Notes</label><input type="text" id="ns-notes"></div>
         <div class="btn-row">
-          <button class="btn btn-brand" onclick="submitSupplier()">＋ Добавить</button>
+          <button class="btn btn-brand" id="supplierSubmitBtn" onclick="submitSupplier()">＋ Add supplier</button>
+          <button class="btn btn-ghost" onclick="clearSupplierForm()">Clear</button>
         </div>
         <div class="auth-error" id="nsError"></div>
       </div>
 
-      <div style="margin-bottom:10px"><input id="suppliersSearch" placeholder="🔍 Поиск..." oninput="renderSuppliers()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
-      <div class="card" style="padding:0;overflow-x:auto">
-        <table id="suppliersTable"><thead><tr><th>Название</th><th>Контакт</th><th>Телефон</th><th>Email</th></tr></thead><tbody></tbody></table>
+      <div style="margin-bottom:10px"><input id="suppliersSearch" placeholder="🔍 Search..." oninput="renderSuppliers()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:200px">
+        <select id="suppliersSort" onchange="renderSuppliers()" style="margin-left:8px;padding:8px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+          <option value="">Сортировка: по умолчанию</option>
+          <option value="name-asc">Название А→Я</option>
+          <option value="name-desc">Название Я→А</option>
+        </select>
       </div>
+
+      <div class="card-title" style="margin-bottom:10px">Supplier list</div>
+      <div id="supplierList"></div>
     </div>
 
   </div>
