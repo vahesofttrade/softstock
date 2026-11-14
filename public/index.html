@@ -255,6 +255,7 @@
             <label class="switch"><input type="checkbox" id="forecastMethodToggle" onchange="onForecastMethodChange()"><span class="slider-toggle"></span></label>
             <span class="toggle-label" id="fcLblManual">✏️ Ручная</span>
           </div>
+          <button class="btn btn-ghost btn-sm" id="fcHideZeroBtn" onclick="toggleForecastHideZero()" title="Нулевые позиции с приоритетом High и Medium показываются всегда">🚫 Скрыть нулевые</button>
           <select id="forecastSort" onchange="renderForecast()" style="padding:8px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
             <option value="days-asc">Дней осталось ↑</option>
             <option value="days-desc">Дней осталось ↓</option>

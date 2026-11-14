@@ -996,6 +996,8 @@ function resetLvlAsOf(){
   renderLevels();
 }
 function setLvlRate(mode){ lvlRateMode = mode; renderLevels(); }
+// Zero-stock items with High/Medium priority are never hidden by the "hide zero" buttons
+function isImportantPriority(p){ return p && (p.priority==='high' || p.priority==='medium'); }
 function toggleLvlHideZero(){ lvlHideZero = !lvlHideZero; renderLevels(); }
 function setLvlSummaryFilter(f){ lvlSummaryFilter = (lvlSummaryFilter===f && f!=='all') ? '' : (f==='all'?'':f); renderLevels(); }
 function setLvlSort(col){
@@ -1080,7 +1082,7 @@ function lvlFilteredSortedRows(){
   else if(levelsTypeFilter) rows = rows.filter(r=>r.p.type===levelsTypeFilter);
 
   if(levelsPriorityFilter) rows = rows.filter(r=>(r.p.priority||'')===levelsPriorityFilter);
-  if(lvlHideZero) rows = rows.filter(r=>r.balance>0);
+  if(lvlHideZero) rows = rows.filter(r=>r.balance>0 || isImportantPriority(r.p));
   if(lvlSummaryFilter==='zero') rows = rows.filter(r=>r.balance===0);
   else if(lvlSummaryFilter==='low') rows = rows.filter(r=>r.balance>0 && r.balance<1000);
   else if(lvlSummaryFilter==='healthy') rows = rows.filter(r=>r.balance>=1000);
@@ -1113,6 +1115,7 @@ function renderLevels(){
   document.getElementById('lvlRateManual').classList.toggle('active', lvlRateMode==='manual');
   const hzBtn = document.getElementById('lvlHideZeroBtn');
   hzBtn.textContent = (lvlHideZero?'✅ ':'🚫 ')+'Скрыть нулевые';
+  hzBtn.title = 'Нулевые позиции с приоритетом High и Medium показываются всегда';
 
   const asOfBalances = lvlAsOfDate ? computeBalancesAsOf(lvlAsOfDate) : null;
 
@@ -1225,6 +1228,12 @@ function renderHistory(){
 let forecastMethod = 'weighted';   // 'weighted' | 'manual'
 let forecastTypeFilterState = '';
 let forecastImportanceFilterState = '';
+let forecastHideZero = (()=>{ try{ return localStorage.getItem('ss_fc_hidezero')==='1'; }catch(e){ return false; } })();
+function toggleForecastHideZero(){
+  forecastHideZero = !forecastHideZero;
+  try{ localStorage.setItem('ss_fc_hidezero', forecastHideZero?'1':'0'); }catch(e){}
+  renderForecast();
+}
 let forecastActiveUrgency = 'all'; // 'all' | 'critical' | 'soon' | 'upcoming' | 'ok'
 
 function onForecastMethodChange(){
@@ -1282,7 +1291,7 @@ function renderForecast(){
     const {rate, label} = forecastRateFor(p, avgByProd);
     const balance = Number(p.balance);
     let daysLeft, runOutDate, orderByDate, urgency, runOutMonth, runOutYear;
-    if(rate>0 && balance<=0){
+    if(balance<=0 && (rate>0 || isImportantPriority(p))){
       // already out of stock but still consumed — the most urgent case
       daysLeft = 0; runOutDate = 'закончился'; orderByDate = 'срочно';
       runOutMonth = -1; runOutYear = 0; urgency = 'out';
@@ -1299,7 +1308,10 @@ function renderForecast(){
       runOutMonth=99; runOutYear=9999; urgency='nodata';
     }
     return {p, rate, rateLabel:label, balance, daysLeft, runOutDate, orderByDate, urgency, runOutMonth, runOutYear};
-  }).filter(r=>r.balance>0 || r.urgency==='out');   // zero stock with no consumption = inactive, hidden
+  }).filter(r=>r.balance>0 || r.urgency==='out');   // zero stock, no consumption, low/no priority = inactive, hidden
+  if(forecastHideZero) data = data.filter(r=>r.balance>0 || isImportantPriority(r.p));
+  const hzb = document.getElementById('fcHideZeroBtn');
+  if(hzb) hzb.textContent = (forecastHideZero?'✅ ':'🚫 ')+'Скрыть нулевые';
 
   if(forecastTypeFilterState) data = data.filter(r=>r.p.type===forecastTypeFilterState);
   if(forecastImportanceFilterState) data = data.filter(r=>(r.p.priority||'')===forecastImportanceFilterState);
@@ -1412,7 +1424,7 @@ function renderForecast(){
           <div class="fc-box"><div class="fc-box-lbl">🏁 Кончится</div><div class="fc-box-val" style="color:${s.dot}">${r.runOutDate}</div></div>
           <div class="fc-box"><div class="fc-box-lbl">🛒 Заказать до</div><div class="fc-box-val" style="color:var(--amber)">${r.orderByDate}</div></div>
         </div>
-        <div style="font-size:11px;color:var(--text-2);padding:4px 0;border-top:1px solid ${s.border}">${r.urgency==='out'?'⛔ <strong>Закончился</strong> — расход '+fmt(r.rate).toLocaleString()+' кг/день, нужен заказ':'⏱ '+(r.daysLeft==null?'<strong>норма не задана</strong>':'<strong>'+r.daysLeft+' дн.</strong> осталось')}</div>
+        <div style="font-size:11px;color:var(--text-2);padding:4px 0;border-top:1px solid ${s.border}">${r.urgency==='out'?'⛔ <strong>Закончился</strong> — '+(r.rate>0?'расход '+fmt(r.rate).toLocaleString()+' кг/день, ':'расхода нет, но приоритет '+(r.p.priority==='high'?'High':'Medium')+' — ')+'нужен заказ':'⏱ '+(r.daysLeft==null?'<strong>норма не задана</strong>':'<strong>'+r.daysLeft+' дн.</strong> осталось')}</div>
         ${deliverySection}
       </div>`;
     }).join('');
