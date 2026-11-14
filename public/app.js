@@ -906,7 +906,7 @@ function renderDashRecent(){
   tbody.innerHTML = rows.map(r=>{
     const p = products.find(x=>x.id===r.product_id);
     if(!p) return '';
-    return `<tr>
+    return `<tr data-pcard="${p.id}" title="Открыть карточку товара">
       <td>${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></td>
       <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
       <td class="num">${fmt(p.balance).toLocaleString()}</td>
@@ -1177,7 +1177,7 @@ function renderLevels(){
     const dailyCell = usedManual
       ? `${fmt(daily).toLocaleString()} <a href="#" onclick="event.preventDefault();editManualRate(${p.id})" title="Изменить ручную норму">✏️</a>`
       : (canEdit() ? `${daily>0?fmt(daily).toLocaleString():'—'} <a href="#" onclick="event.preventDefault();editManualRate(${p.id})" title="Задать ручную норму" style="opacity:.5">✏️</a>` : (daily>0?fmt(daily).toLocaleString():'—'));
-    return `<tr>
+    return `<tr data-pcard="${p.id}" title="Открыть карточку товара">
       <td>${dot}${p.name}${badge}</td>
       <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
       <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
@@ -1401,7 +1401,7 @@ function renderForecast(){
           </div>
           ${daysWithDelivery!==null?`<div style="margin-top:6px;padding-top:6px;border-top:1px solid #93c5fd;font-size:11px;color:#1d4ed8">⏱ С учётом поставки: <strong>${daysWithDelivery} дн.</strong></div>`:''}
         </div>` : '';
-      return `<div class="fc-card" style="background:${s.bg};border-color:${s.border}">
+      return `<div class="fc-card" data-pcard="${p.id}" title="Открыть карточку товара" style="background:${s.bg};border-color:${s.border}">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div style="display:flex;align-items:center;gap:8px;min-width:0">
             <div style="width:8px;height:8px;border-radius:50%;background:${s.dot};flex-shrink:0"></div>
@@ -1597,7 +1597,7 @@ function orderRowHtml(r){
   const sup = orderSupMap[p.id] || '';
   const dot = p.priority==='high'?'🔴 ':p.priority==='medium'?'🟠 ':p.priority==='low'?'⚪ ':'';
   return `<tr data-pid="${p.id}">
-    <td>${dot}${p.name}</td>
+    <td data-pcard="${p.id}" title="Открыть карточку товара" style="text-decoration:underline dotted;text-underline-offset:3px">${dot}${p.name}</td>
     <td>${typeBadgeHtml(p.type)}</td>
     <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
     <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}${p.balance==0?' <span class="badge badge-critical" style="margin-left:2px">ZERO</span>':''}</td>
@@ -2778,3 +2778,277 @@ new MutationObserver(()=>{
     });
   });
 }).observe(document.body, {childList:true, subtree:true});
+
+
+// ---------------------------------------------------------------
+// PRODUCT CARD (click a product in Forecast / Stock Levels / Orders / Dashboard)
+// ---------------------------------------------------------------
+document.addEventListener('click', e=>{
+  const el = e.target.closest('[data-pcard]');
+  if(!el) return;
+  if(e.target.closest('a,button,input,select,textarea,label')) return;   // don't hijack inner controls
+  openProductCard(Number(el.dataset.pcard));
+});
+document.addEventListener('keydown', e=>{
+  if(e.key==='Escape' && !document.getElementById('productCardModal').classList.contains('hidden')) closeProductCard();
+});
+
+function closeProductCard(){
+  document.getElementById('productCardModal').classList.add('hidden');
+  pcCharts.forEach(c=>{ try{ c.destroy(); }catch(e){} }); pcCharts = [];
+}
+
+// ---------- product card: tabs, analytics, movements ----------
+const pcState = { pid:null, tab:'analytics', gran:'month', moveFilter:'all', moveLimit:40 };
+let pcCharts = [];
+const PC_IN = '#2F6FDB', PC_OUT = '#DC4C4C', PC_BAL = '#0F6E56';   // validated colourblind-safe pair
+
+function setPcTab(tab){
+  pcState.tab = tab;
+  document.querySelectorAll('#pcTabs button').forEach(b=>b.classList.toggle('active', b.dataset.tab===tab));
+  document.querySelectorAll('#productCardModal .pc-pane').forEach(el=>el.classList.toggle('active', el.id==='pcTab-'+tab));
+  document.getElementById('pcSaveBtn').style.display = (tab==='edit' && canEdit()) ? '' : 'none';
+  if(tab==='analytics') renderPcAnalytics();
+  if(tab==='moves') renderPcMoves();
+}
+function setPcGran(g){ pcState.gran = g; renderPcAnalytics(); }
+function setPcMoveFilter(f){ pcState.moveFilter = f; pcState.moveLimit = 40; renderPcMoves(); }
+function pcShowMore(){ pcState.moveLimit += 40; renderPcMoves(); }
+
+function pcEvents(){
+  return stockLog.filter(r=>r.product_id===pcState.pid)
+    .slice().sort((a,b)=> a.date<b.date?1:a.date>b.date?-1:((a.created_at||'')<(b.created_at||'')?1:-1));
+}
+function isoDay(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0'); }
+
+// buckets: [{label, start, end}] as ISO date strings, oldest first
+function pcBuckets(gran){
+  const now = new Date(); const out = [];
+  if(gran==='month'){
+    for(let m=0; m<=now.getMonth(); m++){
+      const st = new Date(now.getFullYear(), m, 1), en = new Date(now.getFullYear(), m+1, 0);
+      out.push({label: st.toLocaleDateString('ru-RU',{month:'short'}).replace('.',''), full: st.toLocaleDateString('ru-RU',{month:'long', year:'numeric'}), start: isoDay(st), end: isoDay(en)});
+    }
+  } else if(gran==='week'){
+    const monday = new Date(now); monday.setDate(now.getDate() - ((now.getDay()+6)%7));
+    for(let w=25; w>=0; w--){
+      const st = new Date(monday); st.setDate(monday.getDate()-7*w);
+      const en = new Date(st); en.setDate(st.getDate()+6);
+      const lbl = st.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
+      out.push({label: lbl, full: 'неделя с '+lbl, start: isoDay(st), end: isoDay(en)});
+    }
+  } else {
+    for(let d=59; d>=0; d--){
+      const st = new Date(now); st.setDate(now.getDate()-d);
+      const lbl = st.toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
+      out.push({label: lbl, full: st.toLocaleDateString('ru-RU'), start: isoDay(st), end: isoDay(st)});
+    }
+  }
+  return out;
+}
+
+function pcAggregate(gran){
+  const p = products.find(x=>x.id===pcState.pid);
+  const ev = pcEvents();
+  const bal = Number(p?.balance)||0;
+  return pcBuckets(gran).map(b=>{
+    let inn=0, out=0, corr=0;
+    ev.forEach(e=>{ if(e.date>=b.start && e.date<=b.end){
+      const q = Number(e.quantity)||0;
+      if(e.operation==='add') inn+=q; else if(e.operation==='deduct') out+=q; else corr++;
+    }});
+    // balance at period end = current balance minus everything that happened after it;
+    // unknown if a manual "set balance" correction happened later
+    let endBal = bal, known = true;
+    ev.forEach(e=>{ if(e.date>b.end){
+      const q = Number(e.quantity)||0;
+      if(e.operation==='add') endBal -= q; else if(e.operation==='deduct') endBal += q; else known = false;
+    }});
+    if(b.start > todayISO()) known = false;
+    const partial = gran!=='day' && b.end > todayISO() && b.start <= todayISO();
+    return {...b, full: b.full + (partial ? ' (неполный)' : ''), partial, inn, out, corr, endBal: known ? Math.max(0, endBal) : null};
+  });
+}
+
+function renderPcAnalytics(){
+  const p = products.find(x=>x.id===pcState.pid); if(!p) return;
+  document.querySelectorAll('#pcGranBar .pill').forEach(el=>el.classList.toggle('active', el.dataset.gran===pcState.gran));
+  const ev = pcEvents();
+  const yearStart = new Date().getFullYear()+'-01-01';
+  const ytdIn  = ev.filter(e=>e.operation==='add'    && e.date>=yearStart).reduce((a,e)=>a+Number(e.quantity||0),0);
+  const ytdOut = ev.filter(e=>e.operation==='deduct' && e.date>=yearStart).reduce((a,e)=>a+Number(e.quantity||0),0);
+  const months = pcAggregate('month');
+  const activeMonths = months.filter(m=>m.out>0);
+  const avgMonth = activeMonths.length ? activeMonths.reduce((a,m)=>a+m.out,0)/activeMonths.length : 0;
+  const peak = months.reduce((best,m)=> m.out>(best?best.out:0) ? m : best, null);
+  const last30 = windowTotalsByProduct(30,0)[p.id]||0, prev30 = windowTotalsByProduct(60,30)[p.id]||0;
+  const trend = prev30>0 ? Math.round((last30-prev30)/prev30*100) : null;
+  const outDays = new Set(ev.filter(e=>e.operation==='deduct').map(e=>e.date)).size;
+  const kpi = (l,v,sub)=>`<div class="pc-stat"><div class="pc-stat-l">${l}</div><div class="pc-stat-v">${v}</div>${sub?`<div class="pc-note" style="margin-top:2px">${sub}</div>`:''}</div>`;
+  document.getElementById('pcAnaKpis').innerHTML =
+    kpi('Приход с начала года', fmtKgT(ytdIn)) +
+    kpi('Расход с начала года', fmtKgT(ytdOut), outDays ? outDays+' дн. с расходом' : '') +
+    kpi('Средний расход в месяц', avgMonth>0 ? fmt(avgMonth).toLocaleString()+' кг' : '—', activeMonths.length ? 'по '+activeMonths.length+' мес. с расходом' : '') +
+    kpi('Расход за 30 дней', fmt(last30).toLocaleString()+' кг', trend===null ? 'прошлые 30 дн.: '+fmt(prev30).toLocaleString()+' кг' : (trend>=0?'▲ +':'▼ −')+Math.abs(trend)+'% к прошлым 30 дн.') +
+    kpi('Пиковый месяц', peak ? peak.full : '—', peak ? fmt(peak.out).toLocaleString()+' кг расхода' : '') +
+    kpi('Нетто с начала года', (ytdIn-ytdOut>=0?'+':'')+fmt(ytdIn-ytdOut).toLocaleString()+' кг', 'приход минус расход');
+
+  const rows = pcAggregate(pcState.gran);
+  pcCharts.forEach(c=>{ try{ c.destroy(); }catch(e){} }); pcCharts = [];
+  if(typeof Chart!=='undefined'){
+    const tipKg = c=>' '+c.dataset.label+': '+(c.parsed.y==null?'—':c.parsed.y.toLocaleString()+' кг');
+    const xOpts = { grid:{display:false}, ticks:{maxRotation:0, autoSkip:true, maxTicksLimit:14, color:'#5B6660', font:{size:11}} };
+    const yOpts = { beginAtZero:true, grid:{color:'#EEF0ED'}, border:{display:false}, ticks:{color:'#8A938E', font:{size:11}, callback:v=>v>=1000?(v/1000)+'т':v} };
+    pcCharts.push(new Chart(document.getElementById('pcFlowChart'), {
+      type:'bar',
+      data:{ labels: rows.map(r=>r.label), datasets:[
+        { label:'Приход', data: rows.map(r=>fmt(r.inn)), backgroundColor: PC_IN, borderRadius:4, maxBarThickness:18, borderSkipped:'bottom' },
+        { label:'Расход', data: rows.map(r=>fmt(r.out)), backgroundColor: PC_OUT, borderRadius:4, maxBarThickness:18, borderSkipped:'bottom' }
+      ]},
+      options:{ maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+        plugins:{ legend:{position:'top', align:'end', labels:{boxWidth:10, boxHeight:10, usePointStyle:true, pointStyle:'rectRounded', color:'#5B6660', font:{size:12}}},
+          tooltip:{callbacks:{ title:i=>rows[i[0].dataIndex].full, label:tipKg }} },
+        scales:{ x:xOpts, y:yOpts } }
+    }));
+    pcCharts.push(new Chart(document.getElementById('pcBalChart'), {
+      type:'line',
+      data:{ labels: rows.map(r=>r.label), datasets:[
+        { label:'Остаток', data: rows.map(r=>r.endBal==null?null:fmt(r.endBal)), borderColor: PC_BAL, backgroundColor: PC_BAL, borderWidth:2, pointRadius: pcState.gran==='month'?3:0, pointHoverRadius:5, tension:0.2, spanGaps:false }
+      ]},
+      options:{ maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
+        plugins:{ legend:{display:false}, tooltip:{callbacks:{ title:i=>rows[i[0].dataIndex].full, label:tipKg }} },
+        scales:{ x:xOpts, y:yOpts } }
+    }));
+  }
+  const unknown = rows.some(r=>r.endBal==null && r.start<=todayISO());
+  document.getElementById('pcBalNote').textContent = unknown
+    ? 'Остаток до последней ручной корректировки не восстанавливается — эти периоды пропущены.'
+    : 'Остаток восстановлен от текущего по приходам и расходам.';
+
+  const tb = document.querySelector('#pcPeriodTable tbody');
+  const shown = rows.slice().reverse().filter(r=>r.inn||r.out||r.corr||pcState.gran==='month');
+  tb.innerHTML = shown.length ? shown.map((r,i)=>{
+    const prev = shown[i+1];
+    const d = prev && prev.out>0 ? Math.round((r.out-prev.out)/prev.out*100) : null;
+    const net = r.inn - r.out;
+    return `<tr class="${i===0?'pc-cur':''}">
+      <td>${r.full}</td>
+      <td class="num">${r.inn?fmt(r.inn).toLocaleString():'—'}</td>
+      <td class="num">${r.out?fmt(r.out).toLocaleString():'—'}</td>
+      <td class="num">${net?(net>0?'+':'')+fmt(net).toLocaleString():'—'}</td>
+      <td class="num">${r.endBal==null?'—':fmt(r.endBal).toLocaleString()}</td>
+      <td class="num" style="color:var(--text-2)">${d===null?'—':(d>=0?'▲ +':'▼ −')+Math.abs(d)+'%'}</td>
+    </tr>`;
+  }).join('') : '<tr><td colspan="6" class="empty">Нет движений за этот период</td></tr>';
+}
+
+function renderPcMoves(){
+  document.querySelectorAll('#pcMoveBar .pill').forEach(el=>el.classList.toggle('active', el.dataset.mf===pcState.moveFilter));
+  let ev = pcEvents();
+  if(pcState.moveFilter!=='all') ev = ev.filter(e=>e.operation===pcState.moveFilter);
+  const opLabel = {add:'Приход +', deduct:'Расход −', update:'Установлено ='};
+  const opColor = {add:PC_IN, deduct:PC_OUT, update:'var(--text-2)'};
+  const sum = ev.filter(e=>e.operation!=='update').reduce((a,e)=>a+Number(e.quantity||0),0);
+  document.getElementById('pcMoveCount').textContent = ev.length+' записей с 1 января'+(pcState.moveFilter==='add'||pcState.moveFilter==='deduct' ? ' · всего '+fmt(sum).toLocaleString()+' кг' : '');
+  document.getElementById('pcHistory').innerHTML = ev.length ? ev.slice(0, pcState.moveLimit).map(r=>`<div class="pc-hist">
+      <span style="color:var(--text-2);white-space:nowrap">${r.date}</span>
+      <span style="flex:1;color:var(--text-3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.note||''}</span>
+      <span class="num" style="color:${opColor[r.operation]||'inherit'};font-weight:600;white-space:nowrap">${opLabel[r.operation]||r.operation} ${fmt(r.quantity).toLocaleString()} кг</span>
+    </div>`).join('') : '<div class="empty" style="padding:10px">Нет записей</div>';
+  document.getElementById('pcMoreBtn').classList.toggle('hidden', ev.length <= pcState.moveLimit);
+}
+
+function openProductCard(pid){
+  const p = products.find(x=>x.id===pid);
+  if(!p) return;
+  const editable = canEdit();
+  const weighted = avgDailyByProduct()[p.id] || 0;
+  const manual = manualDailyRate(p);
+  const rate = manual!=null ? manual : weighted;
+  const bal = Number(p.balance)||0;
+  const days = rate>0 ? Math.floor(bal/rate) : null;
+  const u30 = windowTotalsByProduct(30,0)[p.id] || 0;
+  const pend = deliveries.filter(d=>d.product_id===p.id && d.status==='pending');
+  const pendQty = pend.reduce((a,d)=>a+Number(d.quantity||0),0);
+  const reserved = (typeof reservedQtyFor==='function') ? reservedQtyFor(p.id) : 0;
+
+  document.getElementById('pcTitle').textContent = p.name;
+  document.getElementById('pcSub').innerHTML = `${typeBadgeHtml(p.type)} <span>${p.width_cm??'—'} см · ${p.ply} сл · ${p.gsm??'—'} gsm</span>${p.priority?` <span>${p.priority==='high'?'🔴 High':p.priority==='medium'?'🟠 Medium':'⚪ Low'}</span>`:''}`;
+
+  const daysColor = bal<=0 ? 'var(--red)' : days==null ? 'var(--text-2)' : days<7 ? 'var(--red)' : days<30 ? 'var(--amber)' : 'var(--green)';
+  const stat = (l,v,c)=>`<div class="pc-stat"><div class="pc-stat-l">${l}</div><div class="pc-stat-v" ${c?`style="color:${c}"`:''}>${v}</div></div>`;
+  document.getElementById('pcStats').innerHTML =
+    stat('Остаток', fmtKgT(bal), bal<=0?'var(--red)':'') +
+    stat('Расход / день', rate>0 ? fmt(rate).toLocaleString()+' кг'+(manual!=null?' <span style="font-size:10px;font-weight:500;color:var(--brand)">ручн.</span>':'') : '—') +
+    stat('Хватит на', bal<=0 ? 'закончился' : days==null ? '∞' : days+' дн.', daysColor) +
+    stat('Расход за 30 дн.', u30>0 ? fmt(u30).toLocaleString()+' кг' : '—') +
+    (reserved>0 ? stat('В резерве', fmt(reserved).toLocaleString()+' кг', 'var(--amber)') : '') +
+    (pendQty>0 ? stat('Ожидается', '+'+fmt(pendQty).toLocaleString()+' кг', 'var(--brand)') : '');
+
+  document.getElementById('pcPending').innerHTML = pend.length ? `<div style="background:#EFF6FF;border:1px solid #93c5fd;border-radius:var(--radius-sm);padding:8px 12px;font-size:12px;color:#1d4ed8">
+      🚚 ${pend.map(d=>`<b>+${fmt(d.quantity).toLocaleString()} кг</b>${d.expected_date?' · '+d.expected_date:''}${d.suppliers?.name?' · '+d.suppliers.name:''}`).join('<br>🚚 ')}
+    </div>` : '';
+
+  document.getElementById('pc-id').value = p.id;
+  document.getElementById('pc-name').value = p.name || '';
+  document.getElementById('pc-type').innerHTML = TYPES.map(t=>`<option value="${t}" ${t===p.type?'selected':''}>${t}</option>`).join('');
+  document.getElementById('pc-width').value = p.width_cm ?? '';
+  document.getElementById('pc-ply').value = p.ply ?? 1;
+  document.getElementById('pc-gsm').value = p.gsm ?? '';
+  document.getElementById('pc-priority').value = p.priority || '';
+  document.getElementById('pc-manual').value = p.manual_monthly_rate || '';
+  document.getElementById('pc-target').value = p.target_months ?? 2;
+  document.getElementById('pc-comp').value = p.composition || '';
+  document.getElementById('pc-balance').value = fmt(bal);
+  document.getElementById('pcError').textContent = '';
+  document.querySelectorAll('#productCardModal .pc-body input, #productCardModal .pc-body select').forEach(el=>{ el.disabled = !editable; });
+
+  pcState.pid = p.id; pcState.moveFilter = 'all'; pcState.moveLimit = 40;
+  document.getElementById('productCardModal').classList.remove('hidden');
+  setPcTab(pcState.tab || 'analytics');
+}
+
+async function saveProductCard(){
+  const err = document.getElementById('pcError'); err.textContent = '';
+  if(!canEdit()){ err.textContent = 'У вас нет прав на редактирование.'; return; }
+  const id = Number(document.getElementById('pc-id').value);
+  const p = products.find(x=>x.id===id); if(!p) return;
+  const name = document.getElementById('pc-name').value.trim();
+  if(!name){ err.textContent = 'Название не может быть пустым.'; return; }
+  const num = idv=>{ const v = document.getElementById(idv).value; return v==='' ? null : parseFloat(v); };
+  const comp = document.getElementById('pc-comp').value.trim();
+  if(comp && !/^\d{1,3}\s*\/\s*\d{1,3}$/.test(comp)){ err.textContent = 'Состав в формате PES/VIS, например 30/70.'; return; }
+  const patch = {
+    name, type: document.getElementById('pc-type').value,
+    width_cm: num('pc-width'), ply: parseInt(document.getElementById('pc-ply').value)||1, gsm: num('pc-gsm'),
+    priority: document.getElementById('pc-priority').value || null,
+    manual_monthly_rate: num('pc-manual') || null,
+    target_months: num('pc-target') ?? 2,
+    composition: comp || null
+  };
+  const btn = document.getElementById('pcSaveBtn'); btn.disabled = true;
+  try{
+    const { data, error } = await sb.from('products').update(patch).eq('id', id).select('id');
+    if(error){ err.textContent = error.message; return; }
+    if(!data || !data.length){ err.textContent = 'Не сохранено: у вашей роли нет права редактировать товары (выполните migration_permissions.sql).'; return; }
+    const newBal = num('pc-balance');
+    let balMsg = '';
+    if(newBal!==null && Math.abs(newBal - fmt(Number(p.balance)||0)) > 0.0001){
+      const { error: e2 } = await sb.from('stock_log').insert({
+        product_id: id, operation:'update', quantity: newBal, date: todayISO(),
+        note: 'Корректировка из карточки товара (было '+fmt(Number(p.balance)||0).toLocaleString()+' кг)', user_id: me.id
+      });
+      if(e2){ err.textContent = 'Параметры сохранены, но остаток не изменён: '+e2.message; await afterProductCardSave(); return; }
+      balMsg = ' · остаток '+fmt(newBal).toLocaleString()+' кг';
+    }
+    toast('Товар сохранён ✓'+balMsg);
+    await afterProductCardSave();
+    closeProductCard();
+  } finally { btn.disabled = false; }
+}
+
+async function afterProductCardSave(){
+  await Promise.all([loadProducts(), loadStockLog()]);
+  fillProductSelects();
+  renderProducts(); renderLevels(); renderForecast(); applyOrderFilters(); renderDashboard();
+}

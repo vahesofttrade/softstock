@@ -670,6 +670,84 @@
 <div id="toastHost"></div>
 
 <!-- KPI DRILL-DOWN MODAL -->
+<!-- PRODUCT CARD MODAL -->
+<div id="productCardModal" class="hidden" onclick="if(event.target===this) closeProductCard()">
+  <div class="pc-box">
+    <div class="pc-head">
+      <div style="min-width:0">
+        <div class="pc-title" id="pcTitle">Товар</div>
+        <div class="pc-sub" id="pcSub"></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="closeProductCard()">✕</button>
+    </div>
+    <div class="pc-body">
+      <div class="pc-stats" id="pcStats"></div>
+      <div id="pcPending"></div>
+
+      <div class="pc-tabs" id="pcTabs">
+        <button data-tab="analytics" onclick="setPcTab('analytics')">📊 Аналитика</button>
+        <button data-tab="edit" onclick="setPcTab('edit')">✏️ Параметры</button>
+        <button data-tab="moves" onclick="setPcTab('moves')">🕑 Движения</button>
+      </div>
+
+      <div class="pc-pane" id="pcTab-analytics">
+        <div class="pc-ana-kpis" id="pcAnaKpis"></div>
+        <div class="pc-ana-head">
+          <div class="pc-chart-title">Приход и расход, кг</div>
+          <div class="pill-row" style="margin:0" id="pcGranBar">
+            <span class="pill" data-gran="month" onclick="setPcGran('month')">По месяцам</span>
+            <span class="pill" data-gran="week" onclick="setPcGran('week')">По неделям</span>
+            <span class="pill" data-gran="day" onclick="setPcGran('day')">По дням (60)</span>
+          </div>
+        </div>
+        <div class="pc-chart" style="height:230px"><canvas id="pcFlowChart"></canvas></div>
+        <div class="pc-chart-title" style="margin-top:14px">Остаток на конец периода, кг</div>
+        <div class="pc-chart" style="height:150px"><canvas id="pcBalChart"></canvas></div>
+        <div class="pc-note" id="pcBalNote"></div>
+        <div class="pc-chart-title" style="margin-top:14px">Таблица по периодам</div>
+        <div style="overflow-x:auto"><table class="pc-table" id="pcPeriodTable"><thead><tr><th>Период</th><th>Приход</th><th>Расход</th><th>Нетто</th><th>Остаток на конец</th><th>Расход к пред.</th></tr></thead><tbody></tbody></table></div>
+      </div>
+
+      <div class="pc-pane" id="pcTab-edit">
+      <input type="hidden" id="pc-id">
+      <div class="form-row"><label>Название</label><input type="text" id="pc-name"></div>
+      <div class="pc-grid4">
+        <div class="form-row"><label>Тип</label><select id="pc-type"></select></div>
+        <div class="form-row"><label>Ширина (см)</label><input type="number" id="pc-width" step="0.1" min="0"></div>
+        <div class="form-row"><label>Слои (ply)</label><input type="number" id="pc-ply" step="1" min="1"></div>
+        <div class="form-row"><label>GSM</label><input type="number" id="pc-gsm" step="0.1" min="0"></div>
+      </div>
+      <div class="pc-grid4">
+        <div class="form-row"><label>Приоритет</label><select id="pc-priority"><option value="">— нет</option><option value="high">🔴 High</option><option value="medium">🟠 Medium</option><option value="low">⚪ Low</option></select></div>
+        <div class="form-row"><label>Ручная норма (кг/мес)</label><input type="number" id="pc-manual" step="10" min="0" placeholder="напр. 3000"></div>
+        <div class="form-row"><label>Цель запаса (мес.)</label><input type="number" id="pc-target" step="0.5" min="0"></div>
+        <div class="form-row"><label>Состав (PES/VIS)</label><input type="text" id="pc-comp" placeholder="30/70"></div>
+      </div>
+      <div class="form-row"><label>Остаток на складе (кг) — при изменении в историю запишется корректировка</label><input type="number" id="pc-balance" step="0.1" min="0"></div>
+      <div class="auth-error" id="pcError"></div>
+      </div>
+
+      <div class="pc-pane" id="pcTab-moves">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+          <div class="pill-row" style="margin:0" id="pcMoveBar">
+            <span class="pill" data-mf="all" onclick="setPcMoveFilter('all')">Все</span>
+            <span class="pill" data-mf="add" onclick="setPcMoveFilter('add')">Приход</span>
+            <span class="pill" data-mf="deduct" onclick="setPcMoveFilter('deduct')">Расход</span>
+            <span class="pill" data-mf="update" onclick="setPcMoveFilter('update')">Корректировки</span>
+          </div>
+          <span class="pc-note" id="pcMoveCount" style="margin:0"></span>
+        </div>
+        <div id="pcHistory"></div>
+        <div style="text-align:center;margin-top:10px"><button class="btn btn-ghost btn-sm hidden" id="pcMoreBtn" onclick="pcShowMore()">Показать ещё</button></div>
+      </div>
+    </div>
+    <div class="pc-foot">
+      <button class="btn btn-ghost" onclick="closeProductCard()">Закрыть</button>
+      <button class="btn btn-brand" id="pcSaveBtn" onclick="saveProductCard()">💾 Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <div id="kpiDrillModal" class="hidden" style="position:fixed;inset:0;background:rgba(20,30,25,.45);z-index:100;align-items:center;justify-content:center;padding:16px">
   <div style="background:var(--surface);border-radius:var(--radius);width:560px;max-width:100%;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:16px 18px;border-bottom:1px solid var(--border)">

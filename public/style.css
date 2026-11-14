@@ -386,3 +386,44 @@ th.sortable::after{content:' ↕';opacity:.35;font-size:10px}
 th.sort-asc::after{content:' ▲';opacity:1;color:var(--brand)}
 th.sort-desc::after{content:' ▼';opacity:1;color:var(--brand)}
 th.sort-asc,th.sort-desc{color:var(--brand)}
+
+/* Product card modal */
+#productCardModal{position:fixed;inset:0;background:rgba(20,30,25,.45);z-index:110;display:flex;align-items:center;justify-content:center;padding:16px}
+#productCardModal.hidden{display:none}
+.pc-box{background:var(--surface);border-radius:var(--radius);width:760px;max-width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)}
+.pc-head{display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:16px 20px;border-bottom:1px solid var(--border)}
+.pc-title{font-size:16px;font-weight:700}
+.pc-sub{font-size:12px;color:var(--text-2);margin-top:3px;display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.pc-body{padding:16px 20px;overflow-y:auto}
+.pc-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 20px;border-top:1px solid var(--border)}
+.pc-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.pc-stat{background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 12px}
+.pc-stat-l{font-size:10px;color:var(--text-2);text-transform:uppercase;letter-spacing:.04em}
+.pc-stat-v{font-size:15px;font-weight:700;margin-top:3px}
+.pc-section{font-size:12px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em;margin:16px 0 8px}
+.pc-grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.pc-grid4 > .form-row{min-width:0}
+#productCardModal input,#productCardModal select{width:100%;box-sizing:border-box;min-width:0}
+.pc-hist{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:6px 0;border-bottom:1px solid var(--border)}
+.pc-hist:last-child{border-bottom:none}
+[data-pcard]{cursor:pointer}
+tr[data-pcard]:hover td{background:var(--brand-light)}
+@media (max-width:700px){ .pc-stats,.pc-grid4{grid-template-columns:repeat(2,minmax(0,1fr))} }
+
+/* Product card — tabs & analytics */
+.pc-box{width:900px}
+.pc-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin:14px 0 14px}
+.pc-tabs button{border:none;background:none;padding:8px 14px;font:inherit;font-size:13px;font-weight:600;color:var(--text-2);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.pc-tabs button.active{color:var(--brand);border-bottom-color:var(--brand)}
+.pc-pane{display:none}
+.pc-pane.active{display:block}
+.pc-ana-kpis{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:14px}
+.pc-ana-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.pc-chart-title{font-size:12px;font-weight:700;color:var(--text-2);text-transform:uppercase;letter-spacing:.04em}
+.pc-chart{position:relative}
+.pc-note{font-size:11px;color:var(--text-3);margin-top:4px}
+.pc-table{width:100%;min-width:560px;font-size:12.5px;margin-top:6px}
+.pc-table td,.pc-table th{padding:6px 8px;text-align:right}
+.pc-table td:first-child,.pc-table th:first-child{text-align:left}
+.pc-table tr.pc-cur td{font-weight:600}
+@media (max-width:700px){ .pc-ana-kpis{grid-template-columns:repeat(2,minmax(0,1fr))} }
