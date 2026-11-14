@@ -1282,7 +1282,11 @@ function renderForecast(){
     const {rate, label} = forecastRateFor(p, avgByProd);
     const balance = Number(p.balance);
     let daysLeft, runOutDate, orderByDate, urgency, runOutMonth, runOutYear;
-    if(rate>0){
+    if(rate>0 && balance<=0){
+      // already out of stock but still consumed — the most urgent case
+      daysLeft = 0; runOutDate = 'закончился'; orderByDate = 'срочно';
+      runOutMonth = -1; runOutYear = 0; urgency = 'out';
+    } else if(rate>0){
       daysLeft = Math.floor(balance/rate);
       const rod = new Date(now.getTime()+daysLeft*86400000);
       const obd = new Date(rod.getTime()-7*86400000);
@@ -1295,12 +1299,13 @@ function renderForecast(){
       runOutMonth=99; runOutYear=9999; urgency='nodata';
     }
     return {p, rate, rateLabel:label, balance, daysLeft, runOutDate, orderByDate, urgency, runOutMonth, runOutYear};
-  }).filter(r=>r.balance>0);
+  }).filter(r=>r.balance>0 || r.urgency==='out');   // zero stock with no consumption = inactive, hidden
 
   if(forecastTypeFilterState) data = data.filter(r=>r.p.type===forecastTypeFilterState);
   if(forecastImportanceFilterState) data = data.filter(r=>(r.p.priority||'')===forecastImportanceFilterState);
   if(search) data = data.filter(r=> r.p.name.toLowerCase().includes(search) || String(r.p.width_cm||'').includes(search));
 
+  const outCnt = data.filter(r=>r.urgency==='out').length;
   const critical = data.filter(r=>r.urgency==='critical').length;
   const soon = data.filter(r=>r.urgency==='soon').length;
   const upcoming = data.filter(r=>r.urgency==='upcoming').length;
@@ -1311,7 +1316,9 @@ function renderForecast(){
       <div class="avg-val" style="color:${colorVar}">${val}</div>
       <div class="avg-sub">${isA(u)?'✓ активно · сбросить':'нажмите, чтобы отфильтровать'}</div>
     </div>`;
+  document.getElementById('forecastSummary').style.gridTemplateColumns = 'repeat(5,1fr)';
   document.getElementById('forecastSummary').innerHTML =
+    kpi('out','⛔ Нет на складе',outCnt,'#991b1b') +
     kpi('critical','🔴 Критично — 7 дней',critical,'var(--red)') +
     kpi('soon','🟡 Скоро — 30 дней',soon,'var(--amber)') +
     kpi('upcoming','🔵 Предстоит — 60 дней',upcoming,'#3b82f6') +
@@ -1337,12 +1344,14 @@ function renderForecast(){
   data.forEach(r=>{
     let key, label;
     if(r.urgency==='nodata'){ key='9999-99'; label='📋 Нет данных'; }
+    else if(r.urgency==='out'){ key='0000-00'; label='⛔ Нет на складе — нужен заказ'; }
     else { key = r.runOutYear+'-'+String(r.runOutMonth+1).padStart(2,'0'); label = new Date(r.runOutYear,r.runOutMonth,1).toLocaleDateString('ru-RU',{month:'long',year:'numeric'}); }
     if(!groups[key]) groups[key] = {label, items:[]};
     groups[key].items.push(r);
   });
 
   const US = {
+    out:{bg:'#FDE2E2',border:'#ef4444',dot:'#991b1b',label:'НЕТ НА СКЛАДЕ'},
     critical:{bg:'#FBEAEA',border:'#fca5a5',dot:'var(--red)',label:'КРИТИЧНО'},
     soon:{bg:'#FBF1E1',border:'#fcd34d',dot:'var(--amber)',label:'СКОРО'},
     upcoming:{bg:'#E7EFFC',border:'#93c5fd',dot:'#3b82f6',label:'ПРЕДСТОИТ'},
@@ -1403,13 +1412,13 @@ function renderForecast(){
           <div class="fc-box"><div class="fc-box-lbl">🏁 Кончится</div><div class="fc-box-val" style="color:${s.dot}">${r.runOutDate}</div></div>
           <div class="fc-box"><div class="fc-box-lbl">🛒 Заказать до</div><div class="fc-box-val" style="color:var(--amber)">${r.orderByDate}</div></div>
         </div>
-        <div style="font-size:11px;color:var(--text-2);padding:4px 0;border-top:1px solid ${s.border}">⏱ ${r.daysLeft==null?'<strong>норма не задана</strong>':'<strong>'+r.daysLeft+' дн.</strong> осталось'}</div>
+        <div style="font-size:11px;color:var(--text-2);padding:4px 0;border-top:1px solid ${s.border}">${r.urgency==='out'?'⛔ <strong>Закончился</strong> — расход '+fmt(r.rate).toLocaleString()+' кг/день, нужен заказ':'⏱ '+(r.daysLeft==null?'<strong>норма не задана</strong>':'<strong>'+r.daysLeft+' дн.</strong> осталось')}</div>
         ${deliverySection}
       </div>`;
     }).join('');
     return `<div style="margin-bottom:24px">
       <div style="font-size:14px;font-weight:700;margin-bottom:12px;display:flex;align-items:center;gap:10px">
-        <span>📅 ${group.label}</span>
+        <span>${key==="0000-00"||key==="9999-99" ? "" : "📅 "}${group.label}</span>
         <span style="font-size:11px;font-weight:500;color:var(--text-2);background:var(--surface);border:1px solid var(--border);padding:2px 10px;border-radius:99px">${group.items.length} товаров</span>
       </div>
       <div class="forecast-grid">${cards}</div>
