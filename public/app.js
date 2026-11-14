@@ -1204,7 +1204,7 @@ function renderHistory(){
     const key = { date:r=>r.date, product:r=>(r.products?.name||'').toLowerCase(), op:r=>r.operation, qty:r=>Number(r.quantity) }[histSortCol];
     if(key) rows = [...rows].sort((a,b)=>{ const av=key(a), bv=key(b); return (av<bv?-1:av>bv?1:0)*histSortDir; });
   } else {
-    rows = rows.slice(0,60);
+    rows = rows.slice(0,300);
   }
   if(histSortCol) rows = rows.slice(0,200);
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет записей</td></tr>'; return; }
@@ -1351,6 +1351,16 @@ function renderForecast(){
   };
 
   content.innerHTML = clearBar + Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0])).map(([key,group])=>{
+    const fsort = document.getElementById('forecastSort')?.value || 'days-asc';
+    const dk = r => r.daysLeft==null ? Infinity : r.daysLeft;
+    group.items.sort((a,b)=>{
+      if(fsort==='days-desc') return dk(b)-dk(a);
+      if(fsort==='balance-asc') return a.balance-b.balance;
+      if(fsort==='balance-desc') return b.balance-a.balance;
+      if(fsort==='rate-desc') return b.rate-a.rate;
+      if(fsort==='name') return a.p.name.localeCompare(b.p.name) || (a.p.width_cm||0)-(b.p.width_cm||0);
+      return dk(a)-dk(b);
+    });
     const cards = group.items.map(r=>{
       const p = r.p, s = US[r.urgency];
       const isManualFallback = forecastMethod==='manual' && r.rateLabel==='weighted*';
@@ -1586,15 +1596,15 @@ function renderOrderTable(rows){
   if(!rows.length){ wrap.innerHTML = '<div class="empty">Ничего не найдено под текущими фильтрами</div>'; updateOrderSummary(); return; }
 
   const header = `<tr>
-    <th onclick="orderSortBy('name')" style="cursor:pointer">Product Name ↕</th>
-    <th onclick="orderSortBy('type')" style="cursor:pointer">Type ↕</th>
+    <th>Product Name</th>
+    <th>Type</th>
     <th>Width (cm)</th><th>Ply</th><th>GSM</th>
-    <th onclick="orderSortBy('balance-desc')" style="cursor:pointer">Current ↕</th>
-    <th onclick="orderSortBy('daysleft-asc')" style="cursor:pointer">Days left ↕</th>
+    <th>Current</th>
+    <th>Days left</th>
     <th>Incoming</th>
-    <th onclick="orderSortBy('monthly-desc')" style="cursor:pointer">Monthly need ↕</th>
+    <th>Monthly need</th>
     <th>Target</th>
-    <th onclick="orderSortBy('suggested-desc')" style="cursor:pointer">Suggested ↕</th>
+    <th>Suggested</th>
     <th style="color:var(--brand)">Order Qty</th>
     <th style="color:#3b82f6">Supplier</th>
     <th>Status</th>
@@ -1742,9 +1752,17 @@ async function submitDelivery(){
   if(!product_id){ err.textContent='Выберите товар.'; return; }
   if(!(quantity>0)){ err.textContent='Укажите количество.'; return; }
 
-  const { error } = await sb.from('deliveries').insert({ product_id, supplier_id, quantity, expected_date, plate_no });
-  if(error){ err.textContent = error.message; return; }
-  toast('Поставка добавлена ✓');
+  const editId = document.getElementById('dv-edit-id').value;
+  if(editId){
+    const { data, error } = await sb.from('deliveries').update({ product_id, supplier_id, quantity, expected_date, plate_no }).eq('id', editId).select('id');
+    if(error){ err.textContent = error.message; return; }
+    if(!data || !data.length){ err.textContent = 'Не сохранено: у вашей роли нет права редактировать поставки (выполните migration_permissions.sql).'; return; }
+    toast('Поставка обновлена ✓');
+  } else {
+    const { error } = await sb.from('deliveries').insert({ product_id, supplier_id, quantity, expected_date, plate_no });
+    if(error){ err.textContent = error.message; return; }
+    toast('Поставка добавлена ✓');
+  }
   clearDeliveryForm();
   await loadDeliveries(); renderDeliveries(); renderOrders();
 }
@@ -1757,6 +1775,27 @@ function clearDeliveryForm(){
   document.getElementById('dv-plate').value = '';
   document.getElementById('dv-date').value = todayISO();
   document.getElementById('dvHint').textContent = '💡 Select product — Width, Ply, GSM auto-fill';
+  document.getElementById('dv-edit-id').value = '';
+  document.getElementById('dvFormTitle').textContent = 'Add delivery';
+  document.getElementById('dvSubmitBtn').textContent = '＋ Add delivery';
+}
+
+function editDelivery(id){
+  const d = deliveries.find(x=>x.id===id);
+  if(!d) return;
+  document.getElementById('dv-edit-id').value = d.id;
+  document.getElementById('dv-supplier').value = d.supplier_id || '';
+  document.getElementById('dv-type-filter').value = '';
+  filterDeliveryProductDropdown();
+  document.getElementById('dv-product').value = d.product_id;
+  onDeliveryProductSelect();
+  document.getElementById('dv-qty').value = d.quantity;
+  document.getElementById('dv-plate').value = d.plate_no || '';
+  document.getElementById('dv-date').value = d.expected_date || '';
+  document.getElementById('dvFormTitle').textContent = '✏️ Редактирование поставки';
+  document.getElementById('dvSubmitBtn').textContent = '💾 Сохранить изменения';
+  if(d.status==='arrived') document.getElementById('dvHint').textContent = '⚠️ Поставка уже получена: изменение количества не меняет остаток на складе — при необходимости поправьте его через Stock Entry.';
+  document.getElementById('dvFormTitle').scrollIntoView({behavior:'smooth', block:'start'});
 }
 
 async function markArrived(id){
@@ -1775,10 +1814,20 @@ async function markArrived(id){
   renderDeliveries(); renderDashboard(); renderLevels(); renderForecast(); renderOrders();
 }
 
+// Supabase/RLS silently deletes 0 rows when a policy forbids it — detect that
+async function deleteRow(table, id){
+  const { data, error } = await sb.from(table).delete().eq('id', id).select('id');
+  if(error){ toast(error.message, true); return false; }
+  if(!data || !data.length){
+    toast('Не удалено: у вашей роли нет права удалять ('+table+'). Выполните в Supabase скрипт migration_permissions.sql или попросите администратора.', true);
+    return false;
+  }
+  return true;
+}
+
 async function removeDelivery(id){
   if(!confirm('Удалить эту поставку?')) return;
-  const { error } = await sb.from('deliveries').delete().eq('id', id);
-  if(error){ toast(error.message, true); return; }
+  if(!await deleteRow('deliveries', id)) return;
   toast('Поставка удалена ✓');
   await loadDeliveries(); renderDeliveries(); renderOrders();
 }
@@ -1815,6 +1864,7 @@ function _delItemHtml(d){
     </div>
     <div style="display:flex;gap:6px;flex-shrink:0">
       ${d.status==='pending' && canEdit() ? `<button class="btn btn-ghost btn-sm" onclick="markArrived(${d.id})">✓ Arrived</button>` : ''}
+      ${canEdit() ? `<button class="btn-edit" onclick="editDelivery(${d.id})">✏️ Edit</button>` : ''}
       ${canEdit() ? `<button class="btn-icon" onclick="removeDelivery(${d.id})" title="Удалить">✕</button>` : ''}
     </div>
   </div>`;
@@ -1841,6 +1891,8 @@ function renderDeliveries(){
   const entries = Object.entries(groups).sort((a,b)=>{
     if(sortMode==='qty-desc') return groupQty(b[1]) - groupQty(a[1]);
     if(sortMode==='qty-asc') return groupQty(a[1]) - groupQty(b[1]);
+    if(sortMode==='supplier'){ const sa=(a[1].items[0]?.suppliers?.name||'яяя'), sb_=(b[1].items[0]?.suppliers?.name||'яяя'); return sa.localeCompare(sb_); }
+    if(sortMode==='truck') return a[1].truck.localeCompare(b[1].truck);
     const da = a[1].date>'— no date —' ? a[1].date : '';
     const db = b[1].date>'— no date —' ? b[1].date : '';
     return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
@@ -1984,6 +2036,8 @@ function renderReservations(){
   items = [...items].sort((a,b)=>{
     if(sortMode==='qty-desc') return Number(b.quantity)-Number(a.quantity);
     if(sortMode==='qty-asc') return Number(a.quantity)-Number(b.quantity);
+    if(sortMode==='product') return (a.products?.name||'').localeCompare(b.products?.name||'') || (a.products?.width_cm||0)-(b.products?.width_cm||0);
+    if(sortMode==='status'){ const o={reserved:0,confirmed:1,cancelled:2}; return (o[a.status]??3)-(o[b.status]??3) || (b.created_at||'').localeCompare(a.created_at||''); }
     const da = a.created_at||'', db = b.created_at||'';
     return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
   });
@@ -2428,8 +2482,7 @@ async function submitProduct(){
 
 async function deleteProduct(id){
   if(!confirm('Удалить товар? Это также удалит всю его историю.')) return;
-  const { error } = await sb.from('products').delete().eq('id', id);
-  if(error){ toast(error.message, true); return; }
+  if(!await deleteRow('products', id)) return;
   toast('Товар удалён ✓');
   await Promise.all([loadProducts(), loadStockLog()]);
   fillProductSelects(); renderProducts(); renderLevels(); renderDashboard();
@@ -2581,8 +2634,7 @@ function clearSupplierForm(){
 
 async function deleteSupplier(id){
   if(!confirm('Удалить этого поставщика?')) return;
-  const { error } = await sb.from('suppliers').delete().eq('id', id);
-  if(error){ toast(error.message, true); return; }
+  if(!await deleteRow('suppliers', id)) return;
   toast('Поставщик удалён ✓');
   await loadSuppliers(); fillSupplierSelect(); renderSuppliers();
 }
@@ -2615,3 +2667,93 @@ function renderSuppliers(){
     </div>`;
   }).join('');
 }
+
+
+// ---------------------------------------------------------------
+// UNIVERSAL TABLE SORTING
+// Click any column header in any table: ▲ ascending, ▼ descending.
+// The chosen order is kept when the table re-renders (filters, saves).
+// ---------------------------------------------------------------
+const tableSortState = {};   // key -> {col, dir}
+
+function tableSortKey(table){
+  if(table.id) return table.id;
+  const host = table.parentElement && table.parentElement.closest('[id]');
+  return host ? host.id : null;
+}
+function clearTableSort(key){ delete tableSortState[key]; }
+
+function cellSortValue(td){
+  if(!td) return null;
+  const sel = td.querySelector('select');
+  let t;
+  if(sel) t = sel.options[sel.selectedIndex]?.text || '';
+  else {
+    const inp = td.querySelector('input');
+    t = inp ? inp.value : td.textContent;
+  }
+  t = (t||'').replace(/[  ]/g,' ').trim();
+  if(!t || t==='—' || t==='-') return null;
+  if(t.startsWith('∞')) return Infinity;
+  let m = t.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if(m) return m[0];
+  m = t.match(/^(\d{2})\.(\d{2})\.(\d{4})/);
+  if(m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = t.replace(/,/g,'').match(/^[+▲▼↓↑\s]*([−-]?\s*\d+(?:\.\d+)?)/);
+  if(m && !/^\d+\s*[a-zа-яա-ֆ]{3,}/i.test(t.replace(/,/g,''))){
+    let v = parseFloat(m[1].replace(/[\s−]/g, x=> x==='−' ? '-' : ''));
+    if(t.trim().startsWith('▼')) v = -v;
+    return v;
+  }
+  return t.toLocaleLowerCase();
+}
+
+function applyTableSort(table){
+  const key = tableSortKey(table);
+  const st = key && tableSortState[key];
+  const ths = table.tHead ? [...table.tHead.rows[0].cells] : [];
+  ths.forEach((th,i)=>{
+    th.classList.toggle('sort-asc', !!st && st.col===i && st.dir===1);
+    th.classList.toggle('sort-desc', !!st && st.col===i && st.dir===-1);
+  });
+  if(!st) return;
+  const tb = table.tBodies[0]; if(!tb) return;
+  const rows = [...tb.rows].filter(r=>r.cells.length>1);
+  if(rows.length<2) return;
+  const sorted = rows.map((r,idx)=>({r,idx,v:cellSortValue(r.cells[st.col])}))
+    .sort((a,b)=>{
+      if(a.v===null && b.v===null) return a.idx-b.idx;
+      if(a.v===null) return 1;           // empty values always at the bottom
+      if(b.v===null) return -1;
+      let c;
+      if(typeof a.v==='number' && typeof b.v==='number') c = a.v===b.v ? 0 : (a.v<b.v?-1:1);
+      else c = String(a.v).localeCompare(String(b.v), undefined, {numeric:true});
+      return c*st.dir || a.idx-b.idx;
+    }).map(x=>x.r);
+  if(sorted.every((r,i)=>r===rows[i])) return;   // already in order — avoid observer loops
+  sorted.forEach(r=>tb.appendChild(r));
+}
+
+document.addEventListener('click', e=>{
+  const th = e.target.closest('th');
+  if(!th || th.classList.contains('nosort')) return;
+  const table = th.closest('table');
+  if(!table || !table.closest('.pane') || !table.tHead || !table.tHead.contains(th)) return;
+  const key = tableSortKey(table); if(!key) return;
+  const col = th.cellIndex;
+  const st = tableSortState[key];
+  tableSortState[key] = (st && st.col===col) ? {col, dir:-st.dir} : {col, dir:1};
+  document.querySelectorAll('.pane table').forEach(t=>{ if(tableSortKey(t)===key) applyTableSort(t); });
+});
+
+let _sortRaf = null;
+new MutationObserver(()=>{
+  if(_sortRaf) return;
+  _sortRaf = requestAnimationFrame(()=>{
+    _sortRaf = null;
+    document.querySelectorAll('.pane table').forEach(t=>{
+      if(t.tHead) [...t.tHead.rows[0].cells].forEach(th=>{ if(!th.classList.contains('nosort')) th.classList.add('sortable'); });
+      applyTableSort(t);
+    });
+  });
+}).observe(document.body, {childList:true, subtree:true});
