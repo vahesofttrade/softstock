@@ -448,3 +448,29 @@ tr[data-pcard]:hover td{background:var(--brand-light)}
 .pc-chg{padding:8px 0;border-bottom:1px solid var(--border)}
 .pc-chg:last-child{border-bottom:none}
 .pc-chg-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-2);margin-bottom:3px}
+
+/* ── Склад поставщика ── */
+.ss-load-row{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,.8fr) minmax(0,2fr);gap:12px;align-items:end}
+.ss-plan-ctl{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+#ssPreviewTable select{max-width:330px;padding:5px 8px;font-size:12.5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+#ssPreviewTable input{width:110px;padding:5px 8px;font-size:12.5px;border:1px solid var(--border);border-radius:var(--radius-sm);text-align:right}
+#ssPreviewTable tr.ss-unmatched td{background:#FFF7E8}
+.ss-trucks{display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:12px;margin-top:10px}
+.ss-truck{border:1px solid var(--border);border-radius:var(--radius);padding:12px 14px;background:var(--surface)}
+.ss-truck-h{display:flex;justify-content:space-between;align-items:baseline;gap:8px;margin-bottom:6px}
+.ss-truck-h b{font-size:14px}
+.ss-bar{height:8px;border-radius:4px;background:var(--surface-2);overflow:hidden;margin-bottom:10px}
+.ss-bar > span{display:block;height:100%;background:var(--brand);border-radius:4px}
+.ss-bar.part > span{background:var(--amber)}
+.ss-line{display:flex;justify-content:space-between;gap:10px;font-size:12.5px;padding:4px 0;border-bottom:1px dashed var(--border)}
+.ss-line:last-child{border-bottom:none}
+.ss-tag{font-size:10px;font-weight:600;padding:1px 6px;border-radius:999px;margin-left:4px;white-space:nowrap}
+.ss-tag.need{background:#FBEAEA;color:var(--red)}
+.ss-tag.top{background:var(--surface-2);color:var(--text-2)}
+.ss-sum{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;margin-bottom:4px}
+.ss-sum b{font-size:15px}
+@media (max-width:820px){
+  .ss-load-row,.ss-plan-ctl{grid-template-columns:1fr 1fr}
+  .ss-load-row .ss-btns{grid-column:1/-1}
+}
+@media (max-width:600px){ .ss-load-row,.ss-plan-ctl{grid-template-columns:1fr} }

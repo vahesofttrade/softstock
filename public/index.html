@@ -60,6 +60,7 @@
     <div class="nav-group-label">Аналитика</div>
     <div class="nav-item" data-pane="forecast" onclick="showPane('forecast')"><span class="nav-icon">◷</span>Forecast</div>
     <div class="nav-item" data-pane="orders" onclick="showPane('orders')"><span class="nav-icon">▣</span>Orders</div>
+    <div class="nav-item" data-pane="supstock" onclick="showPane('supstock')"><span class="nav-icon">⛟</span>Склад поставщика</div>
     <div class="nav-item" data-pane="deliveries" onclick="showPane('deliveries')"><span class="nav-icon">▽</span>Deliveries</div>
 
     <div class="nav-group-label">Управление</div>
@@ -674,6 +675,79 @@
       <div id="supplierList"></div>
     </div>
 
+
+    <!-- SUPPLIER STOCK → TRUCKS -->
+    <div class="pane" id="pane-supstock">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><h1 class="page-title">⛟ Склад поставщика</h1><p class="page-sub">Что готово у поставщика → какие машины заказать</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="renderSupStock(true)">↻</button>
+      </div>
+
+      <!-- 1. загрузка -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom:6px">1. Загрузить готовую продукцию поставщика</div>
+        <p class="svc-text">Excel/CSV от поставщика, фото или PDF списка (распознаётся сканером) или просто скопируйте строки из таблицы и вставьте. Новая загрузка заменяет прежний остаток этого поставщика.</p>
+        <div class="ss-load-row">
+          <div class="form-row"><label>Поставщик</label><select id="ssSupplier" onchange="ssOnSupplierChange()"></select></div>
+          <div class="form-row"><label>Остаток на дату</label><input type="date" id="ssAsOf"></div>
+          <div class="form-row ss-btns">
+            <label>&nbsp;</label>
+            <div class="svc-btns" style="margin:0">
+              <button class="btn btn-brand" onclick="document.getElementById('ssFile').click()">📂 Excel / CSV / фото / PDF</button>
+              <button class="btn btn-ghost" onclick="ssTogglePaste()">📋 Вставить из таблицы</button>
+            </div>
+            <input type="file" id="ssFile" accept=".xlsx,.xls,.csv,.txt,image/*,application/pdf" style="display:none" onchange="ssHandleFile(this.files[0]); this.value=''">
+          </div>
+        </div>
+        <div id="ssPasteBox" class="hidden" style="margin-top:10px">
+          <textarea id="ssPaste" rows="7" placeholder="Скопируйте строки из Excel и вставьте сюда. Например:&#10;Ռուլոն սպիտակ 330mm 2ply 16gsm	12 400&#10;23/1/17	8 250" style="width:100%;font-family:inherit;font-size:13px;padding:10px;border:1px solid var(--border);border-radius:var(--radius-sm)"></textarea>
+          <div class="svc-btns"><button class="btn btn-brand btn-sm" onclick="ssParsePaste()">Разобрать</button></div>
+        </div>
+        <div class="auth-error" id="ssError"></div>
+        <div class="pc-note" id="ssStatus"></div>
+
+        <div id="ssPreview" class="hidden" style="margin-top:14px">
+          <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px">
+            <b style="font-size:13px">Проверьте сопоставление</b>
+            <span class="pc-note" style="margin:0" id="ssPreviewInfo"></span>
+            <span style="margin-left:auto;font-size:12px;color:var(--text-2)">Количество в файле:</span>
+            <select id="ssUnit" class="ctl" onchange="ssRenderPreview()"><option value="kg">кг</option><option value="t">тонны</option></select>
+          </div>
+          <div style="overflow-x:auto"><table id="ssPreviewTable"><thead><tr>
+            <th class="nosort">У поставщика</th><th class="nosort">Формат</th><th class="nosort">Наш товар</th><th class="nosort">Готово, кг</th><th class="nosort"></th>
+          </tr></thead><tbody></tbody></table></div>
+          <div class="svc-btns" style="margin-top:10px">
+            <button class="btn btn-brand" id="ssSaveBtn" onclick="ssSave()">💾 Сохранить остаток поставщика</button>
+            <button class="btn btn-ghost" onclick="ssCancelPreview()">Отмена</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. план машин -->
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;flex-wrap:wrap;margin-bottom:6px">
+          <div class="card-title">2. Рекомендация поставок</div>
+          <div class="pc-note" style="margin:0" id="ssStockInfo"></div>
+        </div>
+        <div class="ss-plan-ctl">
+          <div class="form-row"><label>Машина, до (т)</label><input type="number" id="ssCap" min="1" step="0.5" value="18" onchange="ssSaveCtl();renderSupPlan()"></div>
+          <div class="form-row"><label>Округлять до, кг</label><input type="number" id="ssStep" min="1" step="50" value="500" onchange="ssSaveCtl();renderSupPlan()"></div>
+          <div class="form-row"><label>Последняя машина</label><select id="ssFill" onchange="ssSaveCtl();renderSupPlan()">
+            <option value="fill">Догружать до полной</option><option value="asis">Только необходимое</option></select></div>
+          <div class="form-row"><label>Ожидаемая дата прихода</label><input type="date" id="ssEta"></div>
+        </div>
+        <div class="pc-note" id="ssBasis" style="margin:2px 0 12px"></div>
+        <div id="ssPlan"><div class="empty">Загрузите остаток поставщика</div></div>
+      </div>
+
+      <!-- 3. что готово -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom:10px">Готово у поставщика и наша потребность</div>
+        <div style="overflow-x:auto"><table id="ssStockTable"><thead><tr>
+          <th>Товар</th><th>Тип</th><th>Готово у пост., кг</th><th>Наш остаток</th><th>В пути</th><th>Потребность/мес</th><th>Запас, дн.</th><th>Нужно до цели</th><th>В плане</th>
+        </tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
 
     <!-- AUDIT LOG -->
     <div class="pane" id="pane-audit">
