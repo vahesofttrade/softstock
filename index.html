@@ -67,6 +67,8 @@
     <div class="nav-item" data-pane="reservations" onclick="showPane('reservations')"><span class="nav-icon">📌</span>Reservations</div>
     <div class="nav-item" data-pane="scanner" onclick="showPane('scanner')"><span class="nav-icon">📷</span>Scanner</div>
     <div class="nav-item" data-pane="suppliers" onclick="showPane('suppliers')"><span class="nav-icon">⌂</span>Suppliers</div>
+    <div class="nav-item" data-pane="audit" onclick="showPane('audit')"><span class="nav-icon">✎</span>Журнал изменений</div>
+    <div class="nav-item" data-pane="service" onclick="showPane('service')"><span class="nav-icon">⛭</span>Сервис</div>
 
     <div class="sidebar-footer">
       <div class="who">Вы: <b id="whoName">—</b><br><span id="whoRole" style="opacity:.8"></span></div>
@@ -119,23 +121,23 @@
       <div class="card-title" style="margin-bottom:8px">🔎 Детально: топ расхода (30 дней)</div>
       <div class="card" style="padding:0;overflow-x:auto;margin-bottom:16px">
         <table id="dashDetailTable"><thead><tr>
-          <th onclick="setDashDetailSort('name')" style="cursor:pointer">Товар</th>
-          <th onclick="setDashDetailSort('type')" style="cursor:pointer">Тип</th>
-          <th onclick="setDashDetailSort('v')" style="cursor:pointer">30д</th>
-          <th onclick="setDashDetailSort('prev')" style="cursor:pointer">Пред. 30д</th>
-          <th onclick="setDashDetailSort('delta')" style="cursor:pointer">Δ</th>
-          <th onclick="setDashDetailSort('daily')" style="cursor:pointer">Расход/день</th>
+          <th>Товар</th>
+          <th>Тип</th>
+          <th>30д</th>
+          <th>Пред. 30д</th>
+          <th>Δ</th>
+          <th>Расход/день</th>
         </tr></thead><tbody></tbody></table>
       </div>
 
       <div class="card-title" style="margin-bottom:8px">🕐 Недавно обновлённые</div>
       <div class="card" style="padding:0;overflow-x:auto">
         <table id="dashRecentTable"><thead><tr>
-          <th onclick="setDashRecentSort('name')" style="cursor:pointer">Товар</th>
-          <th onclick="setDashRecentSort('type')" style="cursor:pointer">Тип</th>
-          <th onclick="setDashRecentSort('balance')" style="cursor:pointer">Остаток</th>
-          <th onclick="setDashRecentSort('daily')" style="cursor:pointer">Расход/день</th>
-          <th onclick="setDashRecentSort('date')" style="cursor:pointer">Обновлено</th>
+          <th>Товар</th>
+          <th>Тип</th>
+          <th>Остаток</th>
+          <th>Расход/день</th>
+          <th>Обновлено</th>
         </tr></thead><tbody></tbody></table>
       </div>
     </div>
@@ -209,16 +211,16 @@
       <div class="card" style="padding:0;overflow-x:auto">
         <table id="levelsTable">
           <thead><tr>
-            <th onclick="setLvlSort('name')" style="cursor:pointer">Товар</th>
-            <th onclick="setLvlSort('type')" style="cursor:pointer">Тип</th>
-            <th onclick="setLvlSort('width')" style="cursor:pointer">Ширина</th>
+            <th>Товар</th>
+            <th>Тип</th>
+            <th>Ширина</th>
             <th>Ply</th><th>GSM</th>
-            <th onclick="setLvlSort('balance')" style="cursor:pointer">Остаток (кг)</th>
+            <th>Остаток (кг)</th>
             <th style="color:var(--brand)">Ожидается (кг)</th>
-            <th onclick="setLvlSort('u30')" style="cursor:pointer">30д</th>
-            <th onclick="setLvlSort('daily')" style="cursor:pointer">Расход/день</th>
-            <th onclick="setLvlSort('days')" style="cursor:pointer">Дней</th>
-            <th>Уровень</th>
+            <th>30д</th>
+            <th>Расход/день</th>
+            <th>Дней</th>
+            <th class="nosort">Уровень</th>
           </tr></thead>
           <tbody></tbody>
         </table>
@@ -232,14 +234,14 @@
 
     <!-- HISTORY -->
     <div class="pane" id="pane-history">
-      <div class="page-header"><h1 class="page-title">History</h1><p class="page-sub">Последние 60 операций</p></div>
+      <div class="page-header"><h1 class="page-title">History</h1><p class="page-sub">Последние 300 операций · нажмите на заголовок колонки, чтобы отсортировать</p></div>
       <div style="margin-bottom:10px"><input id="historySearch" placeholder="🔍 Поиск..." oninput="renderHistory()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
       <div class="card" style="padding:0;overflow-x:auto">
         <table id="historyTable"><thead><tr>
-          <th onclick="setHistSort('date')" style="cursor:pointer">Дата</th>
-          <th onclick="setHistSort('product')" style="cursor:pointer">Товар</th>
-          <th onclick="setHistSort('op')" style="cursor:pointer">Операция</th>
-          <th onclick="setHistSort('qty')" style="cursor:pointer">Кол-во (кг)</th>
+          <th>Дата</th>
+          <th>Товар</th>
+          <th>Операция</th>
+          <th>Кол-во (кг)</th>
           <th>Примечание</th><th>Пользователь</th>
         </tr></thead><tbody></tbody></table>
       </div>
@@ -255,6 +257,16 @@
             <label class="switch"><input type="checkbox" id="forecastMethodToggle" onchange="onForecastMethodChange()"><span class="slider-toggle"></span></label>
             <span class="toggle-label" id="fcLblManual">✏️ Ручная</span>
           </div>
+          <button class="btn btn-ghost btn-sm" id="fcHideZeroBtn" onclick="toggleForecastHideZero()" title="Нулевые позиции с приоритетом High и Medium показываются всегда">🚫 Скрыть нулевые</button>
+          <select id="forecastSort" onchange="renderForecast()" style="padding:8px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+            <option value="format" selected>Ширина ↑, слои ↑</option>
+            <option value="days-asc">Дней осталось ↑</option>
+            <option value="days-desc">Дней осталось ↓</option>
+            <option value="balance-asc">Остаток ↑</option>
+            <option value="balance-desc">Остаток ↓</option>
+            <option value="rate-desc">Расход/день ↓</option>
+            <option value="name">Название А→Я</option>
+          </select>
           <input id="forecastSearch" placeholder="🔍 Поиск..." oninput="renderForecast()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:200px">
           <button class="btn btn-ghost btn-sm" onclick="renderForecast()">↻</button>
         </div>
@@ -290,6 +302,11 @@
       <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
         <div><h1 class="page-title">🛒 Orders</h1><p class="page-sub">Smart order suggestions</p></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <div class="method-toggle" title="На чём основана месячная потребность">
+            <span class="toggle-label" id="ordLblWeighted" style="color:var(--brand);font-weight:700">📊 Взвеш.</span>
+            <label class="switch"><input type="checkbox" id="orderRateToggle" onchange="setOrderRateMode(this.checked?'manual':'weighted')"><span class="slider-toggle"></span></label>
+            <span class="toggle-label" id="ordLblManual">✏️ Ручная</span>
+          </div>
           <button class="btn btn-ghost btn-sm" id="hideZeroOrderBtn" onclick="toggleOrderZero()">🚫 Hide zero/inactive</button>
           <button class="btn btn-ghost btn-sm" onclick="refreshOrders()">↻ Refresh</button>
           <button class="btn btn-ghost btn-sm" onclick="exportOrderExcelBySupplier()">📊 Excel/Supplier</button>
@@ -299,7 +316,8 @@
 
       <div class="card">
         <div class="card-title" style="margin-bottom:4px">🎯 Target stock per type (months)</div>
-        <div style="font-size:12px;color:var(--text-2);margin-bottom:14px">Order = target − current − pending.</div>
+        <div style="font-size:12px;color:var(--text-2);margin-bottom:4px">Order = monthly need × target − current − pending.</div>
+        <div style="font-size:12px;color:var(--text-2);margin-bottom:14px" id="orderRateDesc"></div>
         <div id="orderTypeTargets" class="grid" style="grid-template-columns:repeat(6,1fr)"></div>
       </div>
 
@@ -317,8 +335,8 @@
           <div style="width:1px;height:24px;background:var(--border)"></div>
           <div style="display:flex;gap:6px;align-items:center">
             <span style="font-size:10px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">Sort:</span>
-            <select id="orderSortSelect" onchange="applyOrderFilters()" style="padding:5px 10px;font-size:12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);outline:none">
-              <option value="">Default</option>
+            <select id="orderSortSelect" onchange="clearTableSort('orderTableWrap');applyOrderFilters()" style="padding:5px 10px;font-size:12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);outline:none">
+              <option value="">Ширина ↑, слои ↑</option>
               <option value="balance-asc">Balance ↑</option>
               <option value="balance-desc">Balance ↓</option>
               <option value="suggested-desc">Suggested ↓</option>
@@ -378,7 +396,8 @@
       </div>
 
       <div class="card" style="margin-bottom:20px">
-        <div class="card-title" style="margin-bottom:12px">Add delivery</div>
+        <div class="card-title" style="margin-bottom:12px" id="dvFormTitle">Add delivery</div>
+        <input type="hidden" id="dv-edit-id">
         <div class="form-grid">
           <div class="form-row"><label>Supplier</label><select id="dv-supplier"><option value="">— select supplier —</option></select></div>
           <div class="form-row"><label>Product Type</label><select id="dv-type-filter" onchange="filterDeliveryProductDropdown()"><option value="">— all types —</option>
@@ -394,7 +413,7 @@
         </div>
         <div id="dvHint" style="margin-top:6px;padding:9px 14px;background:#FFFBEB;border:1px solid #fcd34d;border-radius:var(--radius-sm);font-size:12px;color:#92400e">💡 Select product — Width, Ply, GSM auto-fill</div>
         <div class="btn-row">
-          <button class="btn btn-brand" onclick="submitDelivery()">＋ Add delivery</button>
+          <button class="btn btn-brand" id="dvSubmitBtn" onclick="submitDelivery()">＋ Add delivery</button>
           <button class="btn btn-ghost" onclick="clearDeliveryForm()">Clear</button>
         </div>
         <div class="auth-error" id="dvError"></div>
@@ -409,6 +428,8 @@
               <option value="date-asc">Дата ↑ (старые)</option>
               <option value="qty-desc">Количество ↓</option>
               <option value="qty-asc">Количество ↑</option>
+              <option value="supplier">Поставщик А→Я</option>
+              <option value="truck">Машина А→Я</option>
             </select>
             <div class="pill-row" id="deliveryFilterBar" style="margin:0"></div>
           </div>
@@ -499,6 +520,9 @@
             <option value="date-asc">Дата ↑ (старые)</option>
             <option value="qty-desc">Количество ↓</option>
             <option value="qty-asc">Количество ↑</option>
+            <option value="product">Товар А→Я</option>
+            <option value="format">Ширина ↑, слои ↑</option>
+            <option value="status">Статус</option>
           </select>
         </div>
         <div id="resList"></div>
@@ -600,14 +624,14 @@
       <div style="margin-bottom:10px"><input id="productsSearch" placeholder="🔍 Поиск..." oninput="renderProducts()" style="padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;width:240px"></div>
       <div class="card" style="padding:0;overflow-x:auto">
         <table id="productsTable" class="products-table"><thead><tr>
-          <th onclick="setProdSort('name')" style="cursor:pointer">Product Name</th>
-          <th onclick="setProdSort('type')" style="cursor:pointer">Type</th>
-          <th onclick="setProdSort('width')" style="cursor:pointer">Width (cm)</th>
+          <th>Product Name</th>
+          <th>Type</th>
+          <th>Width (cm)</th>
           <th>Ply</th><th>GSM</th>
-          <th onclick="setProdSort('balance')" style="cursor:pointer">Balance</th>
-          <th onclick="setProdSort('weighted')" style="cursor:pointer">Weighted Daily</th>
-          <th onclick="setProdSort('manual')" style="cursor:pointer">Manual Monthly (kg)</th>
-          <th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col">Action</th>
+          <th>Balance</th>
+          <th>Weighted Daily</th>
+          <th>Manual Monthly (kg)</th>
+          <th>Manual Daily</th><th>Priority</th><th>Composition</th><th>Group</th><th class="actions-col nosort">Action</th>
         </tr></thead><tbody></tbody></table>
       </div>
     </div>
@@ -650,12 +674,165 @@
       <div id="supplierList"></div>
     </div>
 
+
+    <!-- AUDIT LOG -->
+    <div class="pane" id="pane-audit">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><h1 class="page-title">Журнал изменений</h1><p class="page-sub">Кто и когда менял товары, нормы, остатки, поставки и поставщиков</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="loadAudit(true)">↻</button>
+      </div>
+      <div class="filter-bar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <input id="auditSearch" class="ctl" placeholder="🔍 Поиск: товар, поле, значение..." oninput="renderAudit()" style="width:260px">
+        <select id="auditTable" class="ctl" onchange="renderAudit()">
+          <option value="">Все объекты</option>
+          <option value="products">Товары (параметры)</option>
+          <option value="balance">Остатки (корректировки)</option>
+          <option value="deliveries">Поставки</option>
+          <option value="suppliers">Поставщики</option>
+        </select>
+        <select id="auditUser" class="ctl" onchange="renderAudit()"><option value="">Все пользователи</option></select>
+        <select id="auditPeriod" class="ctl" onchange="loadAudit(true)">
+          <option value="7">7 дней</option>
+          <option value="30" selected>30 дней</option>
+          <option value="90">90 дней</option>
+          <option value="365">Год</option>
+          <option value="0">Всё время</option>
+        </select>
+      </div>
+      <div class="pc-note" id="auditCount" style="margin:0 0 8px"></div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="auditTableEl"><thead><tr>
+          <th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th class="nosort">Что изменилось</th>
+        </tr></thead><tbody><tr><td colspan="5" class="empty">Загрузка…</td></tr></tbody></table>
+      </div>
+      <div style="text-align:center;margin-top:10px"><button class="btn btn-ghost btn-sm hidden" id="auditMoreBtn" onclick="loadAudit(false)">Показать ещё</button></div>
+    </div>
+
+    <!-- SERVICE -->
+    <div class="pane" id="pane-service">
+      <div class="page-header"><h1 class="page-title">Сервис</h1><p class="page-sub">Резервная копия и уведомления на почту</p></div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title" style="margin-bottom:6px">💾 Резервная копия</div>
+        <p class="svc-text">Все таблицы одним файлом Excel: товары, вся история движений, поставки, резервы, поставщики, журнал изменений и пользователи. Каждая таблица — отдельный лист.</p>
+        <div class="svc-btns">
+          <button class="btn btn-brand" id="backupBtn" onclick="downloadBackup()">⬇ Скачать всё в Excel</button>
+        </div>
+        <div class="pc-note" id="backupStatus"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:6px">🔔 Уведомления на почту</div>
+        <p class="svc-text">Письмо приходит, когда позиция с приоритетом <b>High</b> или <b>Medium</b> заканчивается или запаса остаётся меньше порога. Проверка — каждый час, одно и то же повторно не присылается. Каждое утро в 9:00 — короткая сводка.</p>
+        <div class="form-row"><label>Кому отправлять (несколько адресов — через запятую)</label><input type="text" id="set-email" placeholder="name@example.com"></div>
+        <div class="pc-grid4">
+          <div class="form-row"><label>🔴 High: предупредить, когда осталось ≤ дней</label><input type="number" id="set-days-high" min="0" step="1"></div>
+          <div class="form-row"><label>🟠 Medium: предупредить, когда осталось ≤ дней</label><input type="number" id="set-days-medium" min="0" step="1"></div>
+          <div class="form-row"><label>Предупреждения</label><select id="set-alerts"><option value="true">Включены</option><option value="false">Выключены</option></select></div>
+          <div class="form-row"><label>Утренняя сводка</label><select id="set-summary"><option value="true">Включена</option><option value="false">Выключена</option></select></div>
+        </div>
+        <div class="svc-btns">
+          <button class="btn btn-brand" id="svcSaveBtn" onclick="saveAlertSettings()">💾 Сохранить настройки</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('test')">📨 Тестовое письмо</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('preview')">👁 Предпросмотр</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('summary')">📦 Отправить сводку сейчас</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('alerts')">⚠️ Проверить остатки сейчас</button>
+        </div>
+        <div class="auth-error" id="svcError"></div>
+        <div class="pc-note" id="svcStatus"></div>
+        <div id="svcPreview" class="svc-preview hidden"></div>
+      </div>
+    </div>
   </div>
 </div>
 
 <div id="toastHost"></div>
 
 <!-- KPI DRILL-DOWN MODAL -->
+<!-- PRODUCT CARD MODAL -->
+<div id="productCardModal" class="hidden" onclick="if(event.target===this) closeProductCard()">
+  <div class="pc-box">
+    <div class="pc-head">
+      <div style="min-width:0">
+        <div class="pc-title" id="pcTitle">Товар</div>
+        <div class="pc-sub" id="pcSub"></div>
+      </div>
+      <button class="btn btn-ghost btn-sm" onclick="closeProductCard()">✕</button>
+    </div>
+    <div class="pc-body">
+      <div class="pc-stats" id="pcStats"></div>
+      <div id="pcPending"></div>
+
+      <div class="pc-tabs" id="pcTabs">
+        <button data-tab="analytics" onclick="setPcTab('analytics')">📊 Аналитика</button>
+        <button data-tab="edit" onclick="setPcTab('edit')">✏️ Параметры</button>
+        <button data-tab="moves" onclick="setPcTab('moves')">🕑 Движения</button>
+        <button data-tab="changes" onclick="setPcTab('changes')">✎ Изменения</button>
+      </div>
+
+      <div class="pc-pane" id="pcTab-analytics">
+        <div class="pc-ana-kpis" id="pcAnaKpis"></div>
+        <div class="pc-ana-head">
+          <div class="pc-chart-title">Приход и расход, кг</div>
+          <div class="pill-row" style="margin:0" id="pcGranBar">
+            <span class="pill" data-gran="month" onclick="setPcGran('month')">По месяцам</span>
+            <span class="pill" data-gran="week" onclick="setPcGran('week')">По неделям</span>
+            <span class="pill" data-gran="day" onclick="setPcGran('day')">По дням (60)</span>
+          </div>
+        </div>
+        <div class="pc-chart" style="height:230px"><canvas id="pcFlowChart"></canvas></div>
+        <div class="pc-chart-title" style="margin-top:14px">Остаток на конец периода, кг</div>
+        <div class="pc-chart" style="height:150px"><canvas id="pcBalChart"></canvas></div>
+        <div class="pc-note" id="pcBalNote"></div>
+        <div class="pc-chart-title" style="margin-top:14px">Таблица по периодам</div>
+        <div style="overflow-x:auto"><table class="pc-table" id="pcPeriodTable"><thead><tr><th>Период</th><th>Приход</th><th>Расход</th><th>Нетто</th><th>Остаток на конец</th><th>Расход к пред.</th><th class="pc-yoy-col">Расход год назад</th><th class="pc-yoy-col">К прошлому году</th></tr></thead><tbody></tbody></table></div>
+      </div>
+
+      <div class="pc-pane" id="pcTab-edit">
+      <input type="hidden" id="pc-id">
+      <div class="form-row"><label>Название</label><input type="text" id="pc-name"></div>
+      <div class="pc-grid4">
+        <div class="form-row"><label>Тип</label><select id="pc-type"></select></div>
+        <div class="form-row"><label>Ширина (см)</label><input type="number" id="pc-width" step="0.1" min="0"></div>
+        <div class="form-row"><label>Слои (ply)</label><input type="number" id="pc-ply" step="1" min="1"></div>
+        <div class="form-row"><label>GSM</label><input type="number" id="pc-gsm" step="0.1" min="0"></div>
+      </div>
+      <div class="pc-grid4">
+        <div class="form-row"><label>Приоритет</label><select id="pc-priority"><option value="">— нет</option><option value="high">🔴 High</option><option value="medium">🟠 Medium</option><option value="low">⚪ Low</option></select></div>
+        <div class="form-row"><label>Ручная норма (кг/мес)</label><input type="number" id="pc-manual" step="10" min="0" placeholder="напр. 3000"></div>
+        <div class="form-row"><label>Цель запаса (мес.)</label><input type="number" id="pc-target" step="0.5" min="0"></div>
+        <div class="form-row"><label>Состав (PES/VIS)</label><input type="text" id="pc-comp" placeholder="30/70"></div>
+      </div>
+      <div class="form-row"><label>Остаток на складе (кг) — при изменении в историю запишется корректировка</label><input type="number" id="pc-balance" step="0.1" min="0"></div>
+      <div class="auth-error" id="pcError"></div>
+      </div>
+
+      <div class="pc-pane" id="pcTab-moves">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+          <div class="pill-row" style="margin:0" id="pcMoveBar">
+            <span class="pill" data-mf="all" onclick="setPcMoveFilter('all')">Все</span>
+            <span class="pill" data-mf="add" onclick="setPcMoveFilter('add')">Приход</span>
+            <span class="pill" data-mf="deduct" onclick="setPcMoveFilter('deduct')">Расход</span>
+            <span class="pill" data-mf="update" onclick="setPcMoveFilter('update')">Корректировки</span>
+          </div>
+          <span class="pc-note" id="pcMoveCount" style="margin:0"></span>
+        </div>
+        <div id="pcHistory"></div>
+        <div style="text-align:center;margin-top:10px"><button class="btn btn-ghost btn-sm hidden" id="pcMoreBtn" onclick="pcShowMore()">Показать ещё</button></div>
+      </div>
+
+      <div class="pc-pane" id="pcTab-changes">
+        <div class="pc-note" style="margin:0 0 8px">Кто и когда менял параметры, норму и остаток этого товара</div>
+        <div id="pcChanges"><div class="empty" style="padding:10px">Загрузка…</div></div>
+      </div>
+    </div>
+    <div class="pc-foot">
+      <button class="btn btn-ghost" onclick="closeProductCard()">Закрыть</button>
+      <button class="btn btn-brand" id="pcSaveBtn" onclick="saveProductCard()">💾 Сохранить</button>
+    </div>
+  </div>
+</div>
+
 <div id="kpiDrillModal" class="hidden" style="position:fixed;inset:0;background:rgba(20,30,25,.45);z-index:100;align-items:center;justify-content:center;padding:16px">
   <div style="background:var(--surface);border-radius:var(--radius);width:560px;max-width:100%;max-height:86vh;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,.25)">
     <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;padding:16px 18px;border-bottom:1px solid var(--border)">
