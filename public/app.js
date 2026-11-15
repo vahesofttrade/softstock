@@ -1930,6 +1930,17 @@ function _delItemHtml(d){
   </div>`;
 }
 
+let delGroupIds = {};
+async function removeDeliveryGroup(key){
+  const g = delGroupIds[key]; if(!g) return;
+  if(!confirm(`Удалить машину «${g.truck}» целиком: ${g.ids.length} строк, ${fmt(g.kg).toLocaleString()} кг?`
+    + (g.arrived ? `\n\n${g.arrived} строк уже отмечены как полученные — приход на склад при этом НЕ отменится.` : ''))) return;
+  const { data, error } = await sb.from('deliveries').delete().in('id', g.ids).select('id');
+  if(error){ toast('Ошибка: '+error.message, true); return; }
+  if(!data || data.length < g.ids.length){ toast(`Удалено ${data?data.length:0} из ${g.ids.length} — нет прав на удаление`, true); }
+  else toast('Машина удалена ✓');
+  await loadDeliveries(); renderDeliveries();
+}
 function renderDeliveries(){
   renderDelFilterBar();
   const wrap = document.getElementById('deliveryList');
@@ -1959,6 +1970,7 @@ function renderDeliveries(){
   });
 
   entries.forEach(([,g])=> g.items.sort((x,y)=> productOrderCmp(products.find(p=>p.id===x.product_id), products.find(p=>p.id===y.product_id))));
+  delGroupIds = {}; entries.forEach(([key,g])=>{ delGroupIds[key] = { ids:g.items.map(x=>x.id), truck:g.truck, kg:g.items.reduce((s,x)=>s+Number(x.quantity||0),0), arrived:g.items.filter(x=>x.status==='arrived').length }; });
   wrap.innerHTML = entries.map(([key,g])=>{
     const pending = g.items.filter(x=>x.status==='pending').length;
     const arrived = g.items.filter(x=>x.status==='arrived').length;
@@ -1977,6 +1989,7 @@ function renderDeliveries(){
         <div style="display:flex;gap:5px;flex-shrink:0">
           ${pending>0?`<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:#FFFBEB;color:#92400e">${pending} pending</span>`:''}
           ${arrived>0?`<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--brand-light);color:var(--brand-dark)">${arrived} arrived</span>`:''}
+          ${canEdit() ? `<button class="btn-icon" title="Удалить всю машину" onclick="event.stopPropagation();removeDeliveryGroup('${key}')">🗑</button>` : ''}
         </div>
       </div>
       <div class="del-folder-body">${g.items.map(_delItemHtml).join('')}</div>
@@ -3684,7 +3697,7 @@ async function ssSave(){
     if(!ins.data || ins.data.length < rows.length) throw new Error('не сохранено — нет прав на изменение');
     toast('Остаток поставщика сохранён ✓ ('+rows.length+' строк)');
     ssCancelPreview(); document.getElementById('ssPaste').value='';
-    ssForceOne = false;
+    ssForceOne = false; ssEdit = null;
     await renderSupStock(true);
   }catch(e){ err.textContent = 'Ошибка: '+(e.message||e); }
   finally{ btn.disabled = false; }
@@ -3692,6 +3705,8 @@ async function ssSave(){
 
 // настройки расчёта запоминаются в браузере
 function ssSaveCtl(){
+  if(ssEdit && !confirm('Пересчитать машины заново? Ручные правки плана будут сброшены.')){ ssRestoreCtl(); return; }
+  ssEdit = null;
   try{ localStorage.setItem('ss_plan_ctl', JSON.stringify({ cap:document.getElementById('ssCap').value, step:document.getElementById('ssStep').value, fill:document.getElementById('ssFill').value })); }catch(e){}
 }
 function ssRestoreCtl(){
@@ -3700,7 +3715,7 @@ function ssRestoreCtl(){
     if(c.step) document.getElementById('ssStep').value = c.step;
     if(c.fill) document.getElementById('ssFill').value = c.fill; }catch(e){}
 }
-function ssOnSupplierChange(){ ssForceOne = false; renderSupPlan(); }
+function ssOnSupplierChange(){ ssForceOne = false; ssEdit = null; renderSupPlan(); }
 
 async function renderSupStock(reload){
   if(reload || !supStock.length) await loadSupStock();
@@ -3795,7 +3810,9 @@ function renderSupPlan(){
     return;
   }
   const plan = ssPlanFor(sid); ssLastPlan = { plan, sid };
-  const planned = {}; plan.trucks.forEach(t=>t.lines.forEach(l=>{ planned[l.x.p.id] = (planned[l.x.p.id]||0) + l.qty; }));
+  if(ssEdit && ssEdit.sid!==sid) ssEdit = null;
+  const trucksNow = ssCurrentTrucks();
+  const planned = {}; trucksNow.forEach(t=>t.lines.forEach(l=>{ planned[l.pid] = (planned[l.pid]||0) + (Number(l.qty)||0); }));
 
   // таблица «готово у поставщика»
   const byPid = {}; plan.items.forEach(x=>{ byPid[x.p.id] = x; });
@@ -3813,45 +3830,136 @@ function renderSupPlan(){
     </tr>`).join('') + unmatched.map(r=>`<tr class="ss-unmatched"><td colspan="2">${escHtml(r.raw_name)} <span class="pc-note" style="display:inline">не сопоставлено</span></td><td class="num">${fmt(r.quantity).toLocaleString()}</td><td colspan="6"></td></tr>`).join('')
     || '<tr><td colspan="9" class="empty">Нет данных</td></tr>';
 
-  if(!plan.trucks.length){
-    host.innerHTML = `<div class="empty" style="padding:18px">✓ По нашим остаткам и тому, что в пути, у ${escHtml(sup?.name||'поставщика')} сейчас заказывать не нужно.
-      <div style="margin-top:10px"><button class="btn btn-ghost btn-sm" onclick="ssForceOne=true;renderSupPlan()">Всё равно собрать 1 машину из самого нужного</button></div></div>`;
+  renderSupTrucks();
+}
+
+// ── машины: ручная правка плана ──
+let ssEdit = null;            // { sid, trucks:[{lines:[{pid,qty,kind}]}] } — если план правили руками
+
+// подпись товара в машине: вид основы + формат (+ цвет/название, если это не белый рулон)
+function ssTruckLabel(p){
+  if(!p) return '—';
+  const fmtTxt = (p.width_cm??'—')+'cm·'+p.ply+'ply·'+(p.gsm??'—')+'gsm';
+  return p.type+' · '+fmtTxt + (isWhiteRoll(p) ? '' : ' · '+p.name);
+}
+function ssCurrentTrucks(){
+  if(ssEdit && ssLastPlan && ssEdit.sid===ssLastPlan.sid) return ssEdit.trucks;
+  if(!ssLastPlan) return [];
+  return ssLastPlan.plan.trucks.map(t=>({ lines: t.lines.map(l=>({ pid:l.x.p.id, qty:Math.round(l.qty), kind:l.kind })) }));
+}
+function ssReadyMap(sid){
+  const m = {}; supStock.filter(r=>r.supplier_id===sid && r.product_id).forEach(r=>{ m[r.product_id] = (m[r.product_id]||0) + Number(r.quantity||0); });
+  return m;
+}
+function ssBeginEdit(){
+  if(!ssEdit) ssEdit = { sid: ssLastPlan.sid, trucks: JSON.parse(JSON.stringify(ssCurrentTrucks())) };
+  return ssEdit.trucks;
+}
+function ssAfterEdit(){ renderSupPlan(); }
+function ssSetQty(ti, li, v){ const t = ssBeginEdit(); t[ti].lines[li].qty = Math.max(0, Math.round(parseFloat(v)||0)); ssAfterEdit(); }
+function ssDelLine(ti, li){ const t = ssBeginEdit(); t[ti].lines.splice(li,1); ssAfterEdit(); }
+function ssDelTruck(ti){ const t = ssBeginEdit(); t.splice(ti,1); ssAfterEdit(); }
+function ssAddTruck(){ const t = ssBeginEdit(); t.push({ lines:[] }); ssAfterEdit(); }
+function ssMoveLine(ti, li, to){
+  to = Number(to); if(isNaN(to) || to===ti) return;
+  const t = ssBeginEdit(); const [l] = t[ti].lines.splice(li,1);
+  if(to>=t.length) t.push({ lines:[] });
+  const ex = t[to].lines.find(x=>x.pid===l.pid && x.kind===l.kind);
+  if(ex) ex.qty += l.qty; else t[to].lines.push(l);
+  ssAfterEdit();
+}
+function ssAddLine(ti){
+  const pid = Number(document.getElementById('ssAddP-'+ti).value), qty = Math.round(parseFloat(document.getElementById('ssAddQ-'+ti).value)||0);
+  if(!pid || !(qty>0)){ toast('Выберите товар и количество', true); return; }
+  const t = ssBeginEdit();
+  const ex = t[ti].lines.find(x=>x.pid===pid);
+  if(ex) ex.qty += qty; else t[ti].lines.push({ pid, qty, kind:'manual' });
+  ssAfterEdit();
+}
+function ssResetEdit(){ ssEdit = null; renderSupPlan(); }
+
+function renderSupTrucks(){
+  const host = document.getElementById('ssPlan');
+  const { plan, sid } = ssLastPlan;
+  const sup = suppliers.find(s=>s.id===sid);
+  const trucks = ssCurrentTrucks();
+  const capKg = plan.capKg;
+  const ready = ssReadyMap(sid);
+  const used = {}; trucks.forEach(t=>t.lines.forEach(l=>{ used[l.pid] = (used[l.pid]||0) + (Number(l.qty)||0); }));
+  const P = id=>products.find(p=>p.id===id);
+
+  if(!trucks.length){
+    host.innerHTML = `<div class="empty" style="padding:18px">${ssEdit ? 'Все машины удалены.' : `✓ По нашим остаткам и тому, что в пути, у ${escHtml(sup?.name||'поставщика')} сейчас заказывать не нужно.`}
+      <div class="svc-btns" style="justify-content:center;margin-top:10px">
+        ${ssEdit ? '<button class="btn btn-ghost btn-sm" onclick="ssResetEdit()">↺ Вернуть расчёт</button>' : '<button class="btn btn-ghost btn-sm" onclick="ssForceOne=true;renderSupPlan()">Собрать 1 машину из самого нужного</button>'}
+        <button class="btn btn-ghost btn-sm" onclick="ssAddTruck()">＋ Пустая машина</button>
+      </div></div>`;
     return;
   }
-  const totalKg = plan.trucks.reduce((s,t)=>s+t.total,0);
-  const topKg = plan.trucks.reduce((s,t)=>s+t.lines.filter(l=>l.kind==='top').reduce((a,l)=>a+l.qty,0),0);
-  const last = plan.trucks[plan.trucks.length-1];
+  const totalKg = trucks.reduce((s,t)=>s+t.lines.reduce((a,l)=>a+(Number(l.qty)||0),0),0);
+  const sumKind = k=> trucks.reduce((s,t)=>s+t.lines.filter(l=>l.kind===k).reduce((a,l)=>a+(Number(l.qty)||0),0),0);
+  const over = Object.keys(used).map(Number).filter(pid=> used[pid] > (ready[pid]||0) + 0.5);
+  const lastTotal = trucks[trucks.length-1].lines.reduce((a,l)=>a+(Number(l.qty)||0),0);
+  // товары поставщика для «добавить»: сначала с остатком
+  const addOpts = Object.keys(ready).map(Number).map(pid=>({ p:P(pid), left:(ready[pid]||0)-(used[pid]||0) })).filter(x=>x.p)
+    .sort((a,b)=> (b.left>0)-(a.left>0) || productOrderCmp(a.p,b.p))
+    .map(x=>`<option value="${x.p.id}">${escHtml(ssTruckLabel(x.p))} — свободно ${fmt(Math.max(0,x.left)).toLocaleString()} кг</option>`).join('');
+
   host.innerHTML = `
     <div class="ss-sum">
-      <span>Машин: <b>${plan.trucks.length}</b></span>
+      <span>Машин: <b>${trucks.length}</b></span>
       <span>Всего: <b>${fmt(totalKg).toLocaleString()} кг</b></span>
-      <span>Необходимое: <b>${fmt(totalKg-topKg).toLocaleString()} кг</b></span>
-      ${topKg>0?`<span>Догрузка: <b>${fmt(topKg).toLocaleString()} кг</b></span>`:''}
+      <span>Необходимое: <b>${fmt(sumKind('need')).toLocaleString()} кг</b></span>
+      ${sumKind('top')>0?`<span>Догрузка: <b>${fmt(sumKind('top')).toLocaleString()} кг</b></span>`:''}
+      ${sumKind('manual')>0?`<span>Добавлено вручную: <b>${fmt(sumKind('manual')).toLocaleString()} кг</b></span>`:''}
     </div>
-    ${plan.shortNeed>0?`<div class="pc-note" style="color:var(--amber)">У поставщика не хватает ещё ${fmt(plan.shortNeed).toLocaleString()} кг до нашей цели по этим позициям.</div>`:''}
-    ${last.total < plan.capKg-1 ? `<div class="pc-note">Последняя машина загружена на ${Math.round(last.total/plan.capKg*100)}% — ${document.getElementById('ssFill').value==='fill' ? 'больше догрузить нечем (у поставщика закончились нужные нам позиции).' : 'можно включить «Догружать до полной».'}</div>`:''}
-    <div class="ss-trucks">${plan.trucks.map((t,i)=>`
-      <div class="ss-truck">
-        <div class="ss-truck-h"><b>🚛 Машина ${i+1}</b><span>${fmt(t.total).toLocaleString()} кг · ${Math.round(t.total/plan.capKg*100)}%</span></div>
-        <div class="ss-bar ${t.total<plan.capKg-1?'part':''}"><span style="width:${Math.min(100,t.total/plan.capKg*100)}%"></span></div>
-        ${t.lines.map(l=>`<div class="ss-line"><span>${escHtml(productLabel(l.x.p))}${l.kind==='need'?'<span class="ss-tag need">нужно</span>':'<span class="ss-tag top">догрузка</span>'}</span><b style="white-space:nowrap">${fmt(l.qty).toLocaleString()} кг</b></div>`).join('')}
-      </div>`).join('')}
+    ${ssEdit?`<div class="pc-note" style="color:var(--brand)">✎ План изменён вручную. <a href="#" onclick="ssResetEdit();return false">↺ Вернуть расчёт</a></div>`:''}
+    ${over.length?`<div class="pc-note" style="color:var(--red)">⚠️ Больше, чем готово у поставщика: ${over.map(pid=>escHtml(ssTruckLabel(P(pid)))+' ('+fmt(used[pid]).toLocaleString()+' из '+fmt(ready[pid]||0).toLocaleString()+' кг)').join('; ')}</div>`:''}
+    ${!ssEdit && plan.shortNeed>0?`<div class="pc-note" style="color:var(--amber)">У поставщика не хватает ещё ${fmt(plan.shortNeed).toLocaleString()} кг до нашей цели по этим позициям.</div>`:''}
+    ${!ssEdit && lastTotal < capKg-1 ? `<div class="pc-note">Последняя машина загружена на ${Math.round(lastTotal/capKg*100)}% — ${document.getElementById('ssFill').value==='fill' ? 'больше догрузить нечем (у поставщика закончились нужные нам позиции).' : 'можно включить «Догружать до полной».'}</div>`:''}
+    <div class="ss-trucks">${trucks.map((t,ti)=>{
+      const tot = t.lines.reduce((a,l)=>a+(Number(l.qty)||0),0), pct = Math.round(tot/capKg*100), isOver = tot > capKg + 0.5;
+      return `<div class="ss-truck${isOver?' ss-over':''}">
+        <div class="ss-truck-h"><b>🚛 Машина ${ti+1}</b>
+          <span style="display:flex;align-items:center;gap:8px"><span style="${isOver?'color:var(--red);font-weight:700':''}">${fmt(tot).toLocaleString()} кг · ${pct}%</span>
+          <button class="ss-x" title="Удалить машину" onclick="ssDelTruck(${ti})">🗑</button></span></div>
+        <div class="ss-bar ${isOver?'over':(tot<capKg-1?'part':'')}"><span style="width:${Math.min(100,tot/capKg*100)}%"></span></div>
+        ${isOver?`<div class="pc-note" style="color:var(--red);margin:-4px 0 6px">Перегруз на ${fmt(tot-capKg).toLocaleString()} кг</div>`:''}
+        ${t.lines.map((l,li)=>{ const p = P(l.pid);
+          return `<div class="ss-line ss-line-e">
+            <span class="ss-lbl">${escHtml(ssTruckLabel(p))}${l.kind==='need'?'<span class="ss-tag need">нужно</span>':l.kind==='top'?'<span class="ss-tag top">догрузка</span>':'<span class="ss-tag man">вручную</span>'}</span>
+            <span class="ss-ctl">
+              <input type="number" min="0" step="50" value="${Math.round(Number(l.qty)||0)}" onchange="ssSetQty(${ti},${li},this.value)" title="кг">
+              ${trucks.length>1||true?`<select title="Переложить в другую машину" onchange="ssMoveLine(${ti},${li},this.value)"><option value="">⇄</option>${trucks.map((_,k)=>k===ti?'':`<option value="${k}">в маш. ${k+1}</option>`).join('')}<option value="${trucks.length}">в новую</option></select>`:''}
+              <button class="ss-x" title="Удалить строку" onclick="ssDelLine(${ti},${li})">✕</button>
+            </span></div>`; }).join('') || '<div class="pc-note" style="padding:6px 0">Пустая машина — добавьте товар ниже</div>'}
+        <div class="ss-add">
+          <select id="ssAddP-${ti}"><option value="">＋ Добавить товар…</option>${addOpts}</select>
+          <input type="number" id="ssAddQ-${ti}" min="0" step="50" placeholder="кг" value="${Math.max(0, Math.round(capKg-tot))||''}">
+          <button class="btn btn-ghost btn-sm" onclick="ssAddLine(${ti})">＋</button>
+        </div>
+      </div>`; }).join('')}
     </div>
     <div class="svc-btns" style="margin-top:14px">
-      <button class="btn btn-brand" onclick="ssCreateDeliveries()">🚚 Создать поставки (${plan.trucks.length} маш.)</button>
+      <button class="btn btn-brand" onclick="ssCreateDeliveries()">🚚 Создать поставки (${trucks.length} маш.)</button>
       <button class="btn btn-ghost" onclick="ssExportPlan()">📊 Excel для поставщика</button>
+      <button class="btn btn-ghost" onclick="ssAddTruck()">＋ Машина</button>
+      ${ssEdit?'<button class="btn btn-ghost" onclick="ssResetEdit()">↺ Вернуть расчёт</button>':''}
     </div>`;
 }
 
 async function ssCreateDeliveries(){
   if(!ssLastPlan) return;
   const { plan, sid } = ssLastPlan;
+  const trucks = ssCurrentTrucks().map(t=>({ lines: t.lines.filter(l=>Number(l.qty)>0) })).filter(t=>t.lines.length);
+  if(!trucks.length){ toast('В плане нет машин', true); return; }
+  const over = trucks.findIndex(t=> t.lines.reduce((a,l)=>a+Number(l.qty),0) > plan.capKg + 0.5);
   const eta = document.getElementById('ssEta').value || null;
   const sup = suppliers.find(s=>s.id===sid);
-  if(!confirm(`Создать ${plan.trucks.length} машин(ы) от ${sup?.name||''} в разделе Deliveries со статусом «в пути»?`)) return;
+  if(!confirm(`Создать ${trucks.length} машин(ы) от ${sup?.name||''} в разделе Deliveries со статусом «в пути»?`+(over>=0?`\n\n⚠️ Машина ${over+1} перегружена.`:''))) return;
   const stamp = new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
   const rows = [];
-  plan.trucks.forEach((t,i)=> t.lines.forEach(l=> rows.push({ product_id:l.x.p.id, supplier_id:sid, quantity:Math.round(l.qty), expected_date:eta, status:'pending', plate_no:`План ${stamp} · машина ${i+1}` })));
+  trucks.forEach((t,i)=> t.lines.forEach(l=> rows.push({ product_id:l.pid, supplier_id:sid, quantity:Math.round(Number(l.qty)), expected_date:eta, status:'pending', plate_no:`План ${stamp} · машина ${i+1}` })));
   const { data, error } = await sb.from('deliveries').insert(rows).select('id');
   if(error){ toast('Ошибка: '+error.message, true); return; }
   if(!data || data.length<rows.length){ toast('Не все строки сохранены — нет прав', true); return; }
@@ -3866,25 +3974,28 @@ async function ssCreateDeliveries(){
       await sb.from('supplier_stock').update({ quantity:nq }).eq('id', st.id);
     }
   }
-  toast(`Создано ${plan.trucks.length} машин(ы), ${rows.length} строк в Deliveries ✓ · остаток поставщика уменьшен`);
+  toast(`Создано ${trucks.length} машин(ы), ${rows.length} строк в Deliveries ✓ · остаток поставщика уменьшен`);
   await Promise.all([loadDeliveries(), loadSupStock()]);
-  ssForceOne = false;
+  ssForceOne = false; ssEdit = null;
   renderSupPlan();
 }
 
 async function ssExportPlan(){
   if(!ssLastPlan) return;
-  const { plan, sid } = ssLastPlan;
+  const { sid } = ssLastPlan;
+  const trucks = ssCurrentTrucks();
   const sup = suppliers.find(s=>s.id===sid);
   await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
   const aoa = [['Заказ SoftStock' + (sup?' — '+sup.name:'')], ['Дата', new Date().toLocaleDateString('ru-RU')], [],
-    ['Машина','Товар','Ширина, см','Слои','GSM','Тип','Количество, кг']];
-  plan.trucks.forEach((t,i)=>{
-    t.lines.forEach(l=> aoa.push(['Машина '+(i+1), l.x.p.name, Number(l.x.p.width_cm)||'', l.x.p.ply, Number(l.x.p.gsm)||'', l.x.p.type, Math.round(l.qty)]));
-    aoa.push(['', 'Итого машина '+(i+1), '', '', '', '', Math.round(t.total)]);
+    ['Машина','Вид основы','Ширина, см','Слои','GSM','Цвет / название','Количество, кг']];
+  trucks.forEach((t,i)=>{
+    let tot = 0;
+    t.lines.filter(l=>Number(l.qty)>0).forEach(l=>{ const p = products.find(x=>x.id===l.pid); if(!p) return; tot += Number(l.qty);
+      aoa.push(['Машина '+(i+1), p.type, Number(p.width_cm)||'', p.ply, Number(p.gsm)||'', isWhiteRoll(p)?'белая':p.name, Math.round(Number(l.qty))]); });
+    aoa.push(['', 'Итого машина '+(i+1), '', '', '', '', Math.round(tot)]);
     aoa.push([]);
   });
-  const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{wch:12},{wch:30},{wch:11},{wch:6},{wch:6},{wch:14},{wch:15}];
+  const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{wch:12},{wch:16},{wch:11},{wch:6},{wch:6},{wch:20},{wch:15}];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Заказ');
   XLSX.writeFile(wb, `Заказ_${(sup?.name||'поставщик').replace(/[^\wА-Яа-яԱ-Ֆա-ֆ-]+/g,'_')}_${todayISO()}.xlsx`);
 }

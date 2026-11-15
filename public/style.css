@@ -474,3 +474,16 @@ tr[data-pcard]:hover td{background:var(--brand-light)}
   .ss-load-row .ss-btns{grid-column:1/-1}
 }
 @media (max-width:600px){ .ss-load-row,.ss-plan-ctl{grid-template-columns:1fr} }
+.ss-line-e{align-items:center}
+.ss-lbl{min-width:0;line-height:1.35}
+.ss-ctl{display:flex;align-items:center;gap:4px;flex-shrink:0}
+.ss-ctl input{width:84px;padding:4px 6px;font-size:12.5px;font-weight:600;text-align:right;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.ss-ctl select{width:44px;padding:4px 2px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.ss-x{border:none;background:none;cursor:pointer;color:var(--text-3);font-size:13px;padding:2px 4px;border-radius:4px}
+.ss-x:hover{color:var(--red);background:#FBEAEA}
+.ss-tag.man{background:#E7EFFC;color:#1d4ed8}
+.ss-bar.over > span{background:var(--red)}
+.ss-truck.ss-over{border-color:var(--red)}
+.ss-add{display:flex;gap:4px;margin-top:8px;padding-top:8px;border-top:1px solid var(--border)}
+.ss-add select{flex:1;min-width:0;padding:5px 6px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface)}
+.ss-add input{width:80px;padding:5px 6px;font-size:12px;border:1px solid var(--border);border-radius:var(--radius-sm);text-align:right}
