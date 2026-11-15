@@ -259,6 +259,7 @@
           </div>
           <button class="btn btn-ghost btn-sm" id="fcHideZeroBtn" onclick="toggleForecastHideZero()" title="Нулевые позиции с приоритетом High и Medium показываются всегда">🚫 Скрыть нулевые</button>
           <select id="forecastSort" onchange="renderForecast()" style="padding:8px 10px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+            <option value="format" selected>Ширина ↑, слои ↑</option>
             <option value="days-asc">Дней осталось ↑</option>
             <option value="days-desc">Дней осталось ↓</option>
             <option value="balance-asc">Остаток ↑</option>
@@ -301,6 +302,11 @@
       <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:12px">
         <div><h1 class="page-title">🛒 Orders</h1><p class="page-sub">Smart order suggestions</p></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+          <div class="method-toggle" title="На чём основана месячная потребность">
+            <span class="toggle-label" id="ordLblWeighted" style="color:var(--brand);font-weight:700">📊 Взвеш.</span>
+            <label class="switch"><input type="checkbox" id="orderRateToggle" onchange="setOrderRateMode(this.checked?'manual':'weighted')"><span class="slider-toggle"></span></label>
+            <span class="toggle-label" id="ordLblManual">✏️ Ручная</span>
+          </div>
           <button class="btn btn-ghost btn-sm" id="hideZeroOrderBtn" onclick="toggleOrderZero()">🚫 Hide zero/inactive</button>
           <button class="btn btn-ghost btn-sm" onclick="refreshOrders()">↻ Refresh</button>
           <button class="btn btn-ghost btn-sm" onclick="exportOrderExcelBySupplier()">📊 Excel/Supplier</button>
@@ -310,7 +316,8 @@
 
       <div class="card">
         <div class="card-title" style="margin-bottom:4px">🎯 Target stock per type (months)</div>
-        <div style="font-size:12px;color:var(--text-2);margin-bottom:14px">Order = target − current − pending.</div>
+        <div style="font-size:12px;color:var(--text-2);margin-bottom:4px">Order = monthly need × target − current − pending.</div>
+        <div style="font-size:12px;color:var(--text-2);margin-bottom:14px" id="orderRateDesc"></div>
         <div id="orderTypeTargets" class="grid" style="grid-template-columns:repeat(6,1fr)"></div>
       </div>
 
@@ -329,7 +336,7 @@
           <div style="display:flex;gap:6px;align-items:center">
             <span style="font-size:10px;font-weight:600;color:var(--text-2);text-transform:uppercase;letter-spacing:.05em">Sort:</span>
             <select id="orderSortSelect" onchange="clearTableSort('orderTableWrap');applyOrderFilters()" style="padding:5px 10px;font-size:12px;border:1.5px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);color:var(--text);outline:none">
-              <option value="">Default</option>
+              <option value="">Ширина ↑, слои ↑</option>
               <option value="balance-asc">Balance ↑</option>
               <option value="balance-desc">Balance ↓</option>
               <option value="suggested-desc">Suggested ↓</option>
@@ -514,6 +521,7 @@
             <option value="qty-desc">Количество ↓</option>
             <option value="qty-asc">Количество ↑</option>
             <option value="product">Товар А→Я</option>
+            <option value="format">Ширина ↑, слои ↑</option>
             <option value="status">Статус</option>
           </select>
         </div>

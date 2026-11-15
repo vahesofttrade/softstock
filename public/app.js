@@ -146,7 +146,7 @@ async function refreshAll(){
 async function loadProducts(){
   const { data, error } = await sb.from('products').select('*').order('type').order('name');
   if(error){ toast('Ошибка загрузки товаров: '+error.message, true); return; }
-  products = data||[];
+  products = (data||[]).sort(productOrderCmp);
 }
 async function loadSuppliers(){
   const { data } = await sb.from('suppliers').select('*').order('name');
@@ -195,6 +195,18 @@ function toast(msg, isError){
   el.textContent = msg;
   document.getElementById('toastHost').appendChild(el);
   setTimeout(()=>el.remove(), isError ? 8000 : 3500);
+}
+// Порядок товаров по умолчанию во всех таблицах:
+// сначала «Ռուլոն սպիտակ», затем остальные; внутри — ширина ↑, слои ↑, GSM ↑, название.
+function isWhiteRoll(p){ return /^ռուլոն\s+սպիտակ/.test(String(p?.name||'').toLocaleLowerCase('hy').replace(/\s+/g,' ').trim()); }
+function productOrderCmp(a, b){
+  if(!a || !b) return !a - !b;
+  return (isWhiteRoll(b) - isWhiteRoll(a))
+    || ((a.width_cm ?? 1e9) - (b.width_cm ?? 1e9))
+    || ((a.ply ?? 99) - (b.ply ?? 99))
+    || ((a.gsm ?? 1e9) - (b.gsm ?? 1e9))
+    || String(a.name||'').localeCompare(String(b.name||''))
+    || String(a.type||'').localeCompare(String(b.type||''));
 }
 function productLabel(p){ return p.name+' · '+(p.width_cm||'—')+'cm·'+p.ply+'ply·'+(p.gsm||'—')+'gsm'; }
 
@@ -1374,7 +1386,7 @@ function renderForecast(){
   };
 
   content.innerHTML = clearBar + Object.entries(groups).sort((a,b)=>a[0].localeCompare(b[0])).map(([key,group])=>{
-    const fsort = document.getElementById('forecastSort')?.value || 'days-asc';
+    const fsort = document.getElementById('forecastSort')?.value || 'format';
     const dk = r => r.daysLeft==null ? Infinity : r.daysLeft;
     group.items.sort((a,b)=>{
       if(fsort==='days-desc') return dk(b)-dk(a);
@@ -1382,7 +1394,8 @@ function renderForecast(){
       if(fsort==='balance-desc') return b.balance-a.balance;
       if(fsort==='rate-desc') return b.rate-a.rate;
       if(fsort==='name') return a.p.name.localeCompare(b.p.name) || (a.p.width_cm||0)-(b.p.width_cm||0);
-      return dk(a)-dk(b);
+      if(fsort==='days-asc') return dk(a)-dk(b);
+      return productOrderCmp(a.p, b.p);
     });
     const cards = group.items.map(r=>{
       const p = r.p, s = US[r.urgency];
@@ -1473,6 +1486,24 @@ function fillOrderSupplierOptions(){
   }
 }
 
+let orderRateMode = (()=>{ try{ return localStorage.getItem('ss_order_rate')==='manual' ? 'manual' : 'weighted'; }catch(e){ return 'weighted'; } })();
+function setOrderRateMode(mode){
+  orderRateMode = mode;
+  try{ localStorage.setItem('ss_order_rate', mode); }catch(e){}
+  syncOrderRateToggle();
+  applyOrderFilters();
+}
+function syncOrderRateToggle(){
+  const isManual = orderRateMode==='manual';
+  const t = document.getElementById('orderRateToggle'); if(t) t.checked = isManual;
+  const lw = document.getElementById('ordLblWeighted'), lm = document.getElementById('ordLblManual');
+  if(lw){ lw.style.color = isManual?'var(--text-3)':'var(--brand)'; lw.style.fontWeight = isManual?500:700; }
+  if(lm){ lm.style.color = isManual?'var(--brand)':'var(--text-3)'; lm.style.fontWeight = isManual?700:500; }
+  const d = document.getElementById('orderRateDesc');
+  if(d) d.innerHTML = isManual
+    ? 'Месячная потребность = <b>ручная норма</b> (кг/мес из карточки товара); если нормы нет — взвешенное среднее.'
+    : 'Месячная потребность = <b>взвешенное среднее</b> × 30 (70% последних 30 дней + 30% с начала года).';
+}
 function buildOrderRows(){
   const avgByProd = avgDailyByProduct();
   const pendingByProduct = {};
@@ -1480,8 +1511,10 @@ function buildOrderRows(){
     pendingByProduct[d.product_id] = (pendingByProduct[d.product_id]||0) + Number(d.quantity);
   });
   return products.map(p=>{
-    const rate = avgByProd[p.id]||0;
-    const monthly = rate*30;
+    const manual = manualDailyRate(p);
+    const usedManual = orderRateMode==='manual' && manual!=null;
+    const rate = usedManual ? manual : (avgByProd[p.id]||0);
+    const monthly = usedManual ? Number(p.manual_monthly_rate) : rate*30;
     const targetMonths = getOrderTypeTarget(p.type);
     const targetQty = Math.round(monthly*targetMonths);
     const pending = pendingByProduct[p.id]||0;
@@ -1491,7 +1524,7 @@ function buildOrderRows(){
     const daysLeft = rate>0 ? Math.floor(Number(p.balance)/rate) : (Number(p.balance)>0 ? null : 0);
     const hasRate = rate>0;
     const status = !hasRate ? 'noRate' : suggested>0 ? 'needsOrder' : 'okStock';
-    return {p, rate, monthly, targetMonths, targetQty, pending, suggested, daysLeft, hasRate, status};
+    return {p, rate, monthly, usedManual, targetMonths, targetQty, pending, suggested, daysLeft, hasRate, status};
   });
 }
 
@@ -1605,7 +1638,7 @@ function orderRowHtml(r){
     <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}${p.balance==0?' <span class="badge badge-critical" style="margin-left:2px">ZERO</span>':''}</td>
     <td class="num" style="font-weight:600;color:${daysColor}">${r.daysLeft==null?'<span style="color:var(--text-3);font-weight:400">∞</span>':r.daysLeft+'d'}${urgent?' 🚨':''}</td>
     <td class="num" style="color:var(--brand)">${r.pending>0?'+'+fmt(r.pending).toLocaleString():'—'}</td>
-    <td class="num" style="color:var(--text-2)">${r.monthly>0?fmt(r.monthly).toLocaleString()+' kg':'—'}</td>
+    <td class="num" style="color:var(--text-2)">${r.monthly>0?fmt(r.monthly).toLocaleString()+' kg'+(r.usedManual?' <span style="font-size:10px;font-weight:600;color:var(--brand)">ручн.</span>':(orderRateMode==='manual'?' <span style="font-size:10px;color:var(--text-3)" title="Ручной нормы нет — взято взвешенное среднее">взв.</span>':'')):'—'}</td>
     <td class="num">${r.targetQty>0?fmt(r.targetQty).toLocaleString()+' kg<div style="font-size:9px;color:var(--text-3)">'+r.targetMonths+'mo</div>':'—'}</td>
     <td class="num" style="font-weight:600;color:${r.suggested>0?'var(--red)':'var(--green)'}">${r.suggested>0?fmt(r.suggested).toLocaleString()+' kg':'✓'}</td>
     <td><input type="number" class="ord-qty" data-pid="${p.id}" value="${qty}" min="0" step="500" placeholder="0" oninput="onOrderQtyInput(${p.id},this)" style="width:90px;padding:6px 8px;font-size:12.5px;border:1.5px solid ${qty?'var(--brand)':'var(--border)'};border-radius:var(--radius-sm);background:${qty?'var(--brand-light)':'var(--surface)'};color:var(--text);outline:none;font-weight:${qty?600:400}"></td>
@@ -1754,6 +1787,7 @@ function exportOrderExcelBySupplier(){
 }
 
 function renderOrders(){
+  syncOrderRateToggle();
   renderOrderTypeTargets();
   renderOrderTypeFilterBar();
   renderOrderImpBar();
@@ -1921,6 +1955,7 @@ function renderDeliveries(){
     return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
   });
 
+  entries.forEach(([,g])=> g.items.sort((x,y)=> productOrderCmp(products.find(p=>p.id===x.product_id), products.find(p=>p.id===y.product_id))));
   wrap.innerHTML = entries.map(([key,g])=>{
     const pending = g.items.filter(x=>x.status==='pending').length;
     const arrived = g.items.filter(x=>x.status==='arrived').length;
@@ -2060,6 +2095,7 @@ function renderReservations(){
     if(sortMode==='qty-desc') return Number(b.quantity)-Number(a.quantity);
     if(sortMode==='qty-asc') return Number(a.quantity)-Number(b.quantity);
     if(sortMode==='product') return (a.products?.name||'').localeCompare(b.products?.name||'') || (a.products?.width_cm||0)-(b.products?.width_cm||0);
+    if(sortMode==='format') return productOrderCmp(products.find(p=>p.id===a.product_id), products.find(p=>p.id===b.product_id)) || (b.created_at||'').localeCompare(a.created_at||'');
     if(sortMode==='status'){ const o={reserved:0,confirmed:1,cancelled:2}; return (o[a.status]??3)-(o[b.status]??3) || (b.created_at||'').localeCompare(a.created_at||''); }
     const da = a.created_at||'', db = b.created_at||'';
     return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
