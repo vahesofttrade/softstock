@@ -38,10 +38,12 @@ exports.handler = async (event) => {
     messages: [{
       role: 'user',
       content: [
-        { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
+        mimeType === 'application/pdf'
+          ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: imageBase64 } }
+          : { type: 'image', source: { type: 'base64', media_type: mimeType, data: imageBase64 } },
         {
           type: 'text',
-          text: 'Analyze this shipping invoice / packing list for paper roll products. Extract ALL product line items as a JSON array. CRITICAL RULES: 1) width_mm MUST be parsed from the product NAME text only (the number right before a "mm" marker in the name) — NEVER take width from a table column, table columns are usually roll/place counts, not width. 2) layers comes from a "ply" marker in the product name. 3) gsm comes from a "gsm"/"г/м2" marker in the product name. 4) net_weight_t is the net weight in TONNES from the weight column; a realistic max per line is 25 tonnes — if the sheet shows kg, divide by 1000. 5) qty_places is the integer count of rolls/pallets/places. Each object: {"name_original":"","name_en":"","width_mm":0,"layers":0,"gsm":0,"qty_places":0,"net_weight_t":0,"gross_weight_t":0,"hs_code":"","code":""}. Return ONLY the JSON array, no markdown, no commentary.'
+          text: 'Analyze this shipping invoice / packing list / supplier stock list for paper roll products. Extract ALL product line items as a JSON array. CRITICAL RULES: 1) width_mm MUST be parsed from the product NAME text only (the number right before a "mm" marker in the name) — NEVER take width from a table column, table columns are usually roll/place counts, not width. 2) layers comes from a "ply" marker in the product name. 3) gsm comes from a "gsm"/"г/м2" marker in the product name. 4) net_weight_t is the net weight in TONNES from the weight column; a realistic max per line is 25 tonnes — if the sheet shows kg, divide by 1000. 5) qty_places is the integer count of rolls/pallets/places. Each object: {"name_original":"","name_en":"","width_mm":0,"layers":0,"gsm":0,"qty_places":0,"net_weight_t":0,"gross_weight_t":0,"hs_code":"","code":""}. Return ONLY the JSON array, no markdown, no commentary.'
         }
       ]
     }]
