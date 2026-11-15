@@ -427,3 +427,24 @@ tr[data-pcard]:hover td{background:var(--brand-light)}
 .pc-table td:first-child,.pc-table th:first-child{text-align:left}
 .pc-table tr.pc-cur td{font-weight:600}
 @media (max-width:700px){ .pc-ana-kpis{grid-template-columns:repeat(2,minmax(0,1fr))} }
+
+/* ── Журнал изменений / Сервис ── */
+.ctl{padding:8px 12px;font-size:13px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none;font-family:inherit;color:inherit}
+.svc-text{font-size:13px;color:var(--text-2);margin:0 0 12px;max-width:760px;line-height:1.5}
+.svc-btns{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}
+.svc-preview{margin-top:12px;background:var(--surface-2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:12px 14px;font-size:12.5px;line-height:1.5;white-space:pre-wrap;}
+.svc-preview h4{margin:0 0 6px;font-size:12px;color:var(--text-2);text-transform:uppercase;letter-spacing:.04em}
+.svc-preview + .svc-preview{margin-top:8px}
+.chg{display:block;font-size:12px;line-height:1.55;white-space:normal}
+.chg b{font-weight:600;color:var(--text-2)}
+.chg .old{color:var(--text-3);text-decoration:line-through}
+.chg .new{color:var(--text);font-weight:600}
+.act{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;white-space:nowrap;background:var(--surface-2);color:var(--text-2)}
+.act-insert{background:#E7F3EE;color:var(--brand)}
+.act-delete{background:#FBEAEA;color:var(--red)}
+.act-balance{background:#FBF1E3;color:#9A5F12}
+#auditTableEl td{vertical-align:top}
+#auditTableEl td.obj{max-width:280px}
+.pc-chg{padding:8px 0;border-bottom:1px solid var(--border)}
+.pc-chg:last-child{border-bottom:none}
+.pc-chg-h{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--text-2);margin-bottom:3px}

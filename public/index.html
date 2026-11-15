@@ -67,6 +67,8 @@
     <div class="nav-item" data-pane="reservations" onclick="showPane('reservations')"><span class="nav-icon">📌</span>Reservations</div>
     <div class="nav-item" data-pane="scanner" onclick="showPane('scanner')"><span class="nav-icon">📷</span>Scanner</div>
     <div class="nav-item" data-pane="suppliers" onclick="showPane('suppliers')"><span class="nav-icon">⌂</span>Suppliers</div>
+    <div class="nav-item" data-pane="audit" onclick="showPane('audit')"><span class="nav-icon">✎</span>Журнал изменений</div>
+    <div class="nav-item" data-pane="service" onclick="showPane('service')"><span class="nav-icon">⛭</span>Сервис</div>
 
     <div class="sidebar-footer">
       <div class="who">Вы: <b id="whoName">—</b><br><span id="whoRole" style="opacity:.8"></span></div>
@@ -664,6 +666,75 @@
       <div id="supplierList"></div>
     </div>
 
+
+    <!-- AUDIT LOG -->
+    <div class="pane" id="pane-audit">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><h1 class="page-title">Журнал изменений</h1><p class="page-sub">Кто и когда менял товары, нормы, остатки, поставки и поставщиков</p></div>
+        <button class="btn btn-ghost btn-sm" onclick="loadAudit(true)">↻</button>
+      </div>
+      <div class="filter-bar" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">
+        <input id="auditSearch" class="ctl" placeholder="🔍 Поиск: товар, поле, значение..." oninput="renderAudit()" style="width:260px">
+        <select id="auditTable" class="ctl" onchange="renderAudit()">
+          <option value="">Все объекты</option>
+          <option value="products">Товары (параметры)</option>
+          <option value="balance">Остатки (корректировки)</option>
+          <option value="deliveries">Поставки</option>
+          <option value="suppliers">Поставщики</option>
+        </select>
+        <select id="auditUser" class="ctl" onchange="renderAudit()"><option value="">Все пользователи</option></select>
+        <select id="auditPeriod" class="ctl" onchange="loadAudit(true)">
+          <option value="7">7 дней</option>
+          <option value="30" selected>30 дней</option>
+          <option value="90">90 дней</option>
+          <option value="365">Год</option>
+          <option value="0">Всё время</option>
+        </select>
+      </div>
+      <div class="pc-note" id="auditCount" style="margin:0 0 8px"></div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="auditTableEl"><thead><tr>
+          <th>Когда</th><th>Кто</th><th>Действие</th><th>Объект</th><th class="nosort">Что изменилось</th>
+        </tr></thead><tbody><tr><td colspan="5" class="empty">Загрузка…</td></tr></tbody></table>
+      </div>
+      <div style="text-align:center;margin-top:10px"><button class="btn btn-ghost btn-sm hidden" id="auditMoreBtn" onclick="loadAudit(false)">Показать ещё</button></div>
+    </div>
+
+    <!-- SERVICE -->
+    <div class="pane" id="pane-service">
+      <div class="page-header"><h1 class="page-title">Сервис</h1><p class="page-sub">Резервная копия и уведомления на почту</p></div>
+
+      <div class="card" style="margin-bottom:20px">
+        <div class="card-title" style="margin-bottom:6px">💾 Резервная копия</div>
+        <p class="svc-text">Все таблицы одним файлом Excel: товары, вся история движений, поставки, резервы, поставщики, журнал изменений и пользователи. Каждая таблица — отдельный лист.</p>
+        <div class="svc-btns">
+          <button class="btn btn-brand" id="backupBtn" onclick="downloadBackup()">⬇ Скачать всё в Excel</button>
+        </div>
+        <div class="pc-note" id="backupStatus"></div>
+      </div>
+
+      <div class="card">
+        <div class="card-title" style="margin-bottom:6px">🔔 Уведомления на почту</div>
+        <p class="svc-text">Письмо приходит, когда позиция с приоритетом <b>High</b> или <b>Medium</b> заканчивается или запаса остаётся меньше порога. Проверка — каждый час, одно и то же повторно не присылается. Каждое утро в 9:00 — короткая сводка.</p>
+        <div class="form-row"><label>Кому отправлять (несколько адресов — через запятую)</label><input type="text" id="set-email" placeholder="name@example.com"></div>
+        <div class="pc-grid4">
+          <div class="form-row"><label>🔴 High: предупредить, когда осталось ≤ дней</label><input type="number" id="set-days-high" min="0" step="1"></div>
+          <div class="form-row"><label>🟠 Medium: предупредить, когда осталось ≤ дней</label><input type="number" id="set-days-medium" min="0" step="1"></div>
+          <div class="form-row"><label>Предупреждения</label><select id="set-alerts"><option value="true">Включены</option><option value="false">Выключены</option></select></div>
+          <div class="form-row"><label>Утренняя сводка</label><select id="set-summary"><option value="true">Включена</option><option value="false">Выключена</option></select></div>
+        </div>
+        <div class="svc-btns">
+          <button class="btn btn-brand" id="svcSaveBtn" onclick="saveAlertSettings()">💾 Сохранить настройки</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('test')">📨 Тестовое письмо</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('preview')">👁 Предпросмотр</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('summary')">📦 Отправить сводку сейчас</button>
+          <button class="btn btn-ghost notify-btn" onclick="notifyCall('alerts')">⚠️ Проверить остатки сейчас</button>
+        </div>
+        <div class="auth-error" id="svcError"></div>
+        <div class="pc-note" id="svcStatus"></div>
+        <div id="svcPreview" class="svc-preview hidden"></div>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -688,6 +759,7 @@
         <button data-tab="analytics" onclick="setPcTab('analytics')">📊 Аналитика</button>
         <button data-tab="edit" onclick="setPcTab('edit')">✏️ Параметры</button>
         <button data-tab="moves" onclick="setPcTab('moves')">🕑 Движения</button>
+        <button data-tab="changes" onclick="setPcTab('changes')">✎ Изменения</button>
       </div>
 
       <div class="pc-pane" id="pcTab-analytics">
@@ -705,7 +777,7 @@
         <div class="pc-chart" style="height:150px"><canvas id="pcBalChart"></canvas></div>
         <div class="pc-note" id="pcBalNote"></div>
         <div class="pc-chart-title" style="margin-top:14px">Таблица по периодам</div>
-        <div style="overflow-x:auto"><table class="pc-table" id="pcPeriodTable"><thead><tr><th>Период</th><th>Приход</th><th>Расход</th><th>Нетто</th><th>Остаток на конец</th><th>Расход к пред.</th></tr></thead><tbody></tbody></table></div>
+        <div style="overflow-x:auto"><table class="pc-table" id="pcPeriodTable"><thead><tr><th>Период</th><th>Приход</th><th>Расход</th><th>Нетто</th><th>Остаток на конец</th><th>Расход к пред.</th><th class="pc-yoy-col">Расход год назад</th><th class="pc-yoy-col">К прошлому году</th></tr></thead><tbody></tbody></table></div>
       </div>
 
       <div class="pc-pane" id="pcTab-edit">
@@ -739,6 +811,11 @@
         </div>
         <div id="pcHistory"></div>
         <div style="text-align:center;margin-top:10px"><button class="btn btn-ghost btn-sm hidden" id="pcMoreBtn" onclick="pcShowMore()">Показать ещё</button></div>
+      </div>
+
+      <div class="pc-pane" id="pcTab-changes">
+        <div class="pc-note" style="margin:0 0 8px">Кто и когда менял параметры, норму и остаток этого товара</div>
+        <div id="pcChanges"><div class="empty" style="padding:10px">Загрузка…</div></div>
       </div>
     </div>
     <div class="pc-foot">

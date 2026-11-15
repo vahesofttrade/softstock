@@ -108,6 +108,8 @@ function showPane(name){
   document.querySelector('.nav-item[data-pane="'+name+'"]').classList.add('active');
   document.querySelector('.main')?.scrollTo(0,0);
   if(window.innerWidth<=820) toggleSidebar(false);
+  if(name==='audit') loadAudit(true);
+  if(name==='service') renderService();
 }
 
 function toggleSidebar(force){
@@ -122,7 +124,7 @@ function toggleSidebar(force){
 // DATA LOADING
 // ---------------------------------------------------------------
 async function refreshAll(){
-  await Promise.all([loadProducts(), loadSuppliers(), loadDeliveries(), loadStockLog(), loadReservations()]);
+  await Promise.all([loadProducts(), loadSuppliers(), loadDeliveries(), loadStockLog(), loadReservations(), loadProfileNames()]);
   fillProductSelects();
   fillSupplierSelect();
   renderDashboard();
@@ -1218,7 +1220,7 @@ function renderHistory(){
     <td>${opLabel[r.operation]||r.operation}</td>
     <td class="num">${fmt(r.quantity).toLocaleString()}</td>
     <td style="color:var(--text-2)">${r.note||''}</td>
-    <td style="color:var(--text-3)">${r.user_id===me.id?'Вы':(r.user_id||'').slice(0,8)}</td>
+    <td style="color:var(--text-3)">${r.user_id===me.id?'Вы':userName(r.user_id)}</td>
   </tr>`).join('');
 }
 
@@ -2706,6 +2708,7 @@ function clearTableSort(key){ delete tableSortState[key]; }
 
 function cellSortValue(td){
   if(!td) return null;
+  if(td.dataset && td.dataset.sort) return td.dataset.sort;
   const sel = td.querySelector('select');
   let t;
   if(sel) t = sel.options[sel.selectedIndex]?.text || '';
@@ -2810,6 +2813,7 @@ function setPcTab(tab){
   document.getElementById('pcSaveBtn').style.display = (tab==='edit' && canEdit()) ? '' : 'none';
   if(tab==='analytics') renderPcAnalytics();
   if(tab==='moves') renderPcMoves();
+  if(tab==='changes') renderPcChanges();
 }
 function setPcGran(g){ pcState.gran = g; renderPcAnalytics(); }
 function setPcMoveFilter(f){ pcState.moveFilter = f; pcState.moveLimit = 40; renderPcMoves(); }
@@ -2887,11 +2891,15 @@ function renderPcAnalytics(){
   const kpi = (l,v,sub)=>`<div class="pc-stat"><div class="pc-stat-l">${l}</div><div class="pc-stat-v">${v}</div>${sub?`<div class="pc-note" style="margin-top:2px">${sub}</div>`:''}</div>`;
   document.getElementById('pcAnaKpis').innerHTML =
     kpi('Приход с начала года', fmtKgT(ytdIn)) +
-    kpi('Расход с начала года', fmtKgT(ytdOut), outDays ? outDays+' дн. с расходом' : '') +
+    kpi('Расход с начала года', fmtKgT(ytdOut), pcYoySub(p.id, ytdOut) || (outDays ? outDays+' дн. с расходом' : '')) +
     kpi('Средний расход в месяц', avgMonth>0 ? fmt(avgMonth).toLocaleString()+' кг' : '—', activeMonths.length ? 'по '+activeMonths.length+' мес. с расходом' : '') +
     kpi('Расход за 30 дней', fmt(last30).toLocaleString()+' кг', trend===null ? 'прошлые 30 дн.: '+fmt(prev30).toLocaleString()+' кг' : (trend>=0?'▲ +':'▼ −')+Math.abs(trend)+'% к прошлым 30 дн.') +
     kpi('Пиковый месяц', peak ? peak.full : '—', peak ? fmt(peak.out).toLocaleString()+' кг расхода' : '') +
     kpi('Нетто с начала года', (ytdIn-ytdOut>=0?'+':'')+fmt(ytdIn-ytdOut).toLocaleString()+' кг', 'приход минус расход');
+  const yoy = pcPrevYear[p.id];   // undefined = ещё грузится, null = ошибка, {…} = данные
+  if(yoy===undefined) loadPcPrevYear(p.id);
+  const yoyOn = pcState.gran==='month' && yoy && yoy.total>0;
+  document.querySelectorAll('#pcPeriodTable .pc-yoy-col').forEach(el=>el.style.display = yoyOn ? '' : 'none');
 
   const rows = pcAggregate(pcState.gran);
   pcCharts.forEach(c=>{ try{ c.destroy(); }catch(e){} }); pcCharts = [];
@@ -2903,11 +2911,13 @@ function renderPcAnalytics(){
       type:'bar',
       data:{ labels: rows.map(r=>r.label), datasets:[
         { label:'Приход', data: rows.map(r=>fmt(r.inn)), backgroundColor: PC_IN, borderRadius:4, maxBarThickness:18, borderSkipped:'bottom' },
-        { label:'Расход', data: rows.map(r=>fmt(r.out)), backgroundColor: PC_OUT, borderRadius:4, maxBarThickness:18, borderSkipped:'bottom' }
+        { label:'Расход', data: rows.map(r=>fmt(r.out)), backgroundColor: PC_OUT, borderRadius:4, maxBarThickness:18, borderSkipped:'bottom' },
+        ...(yoyOn ? [{ type:'line', label:'Расход год назад', data: rows.map(r=>fmt(pcPrevOut(yoy, r))),
+            borderColor: PC_PREV, backgroundColor: PC_PREV, borderWidth:2, borderDash:[5,4], pointRadius:3, pointHoverRadius:5, tension:0.2, order:-1 }] : [])
       ]},
       options:{ maintainAspectRatio:false, interaction:{mode:'index', intersect:false},
-        plugins:{ legend:{position:'top', align:'end', labels:{boxWidth:10, boxHeight:10, usePointStyle:true, pointStyle:'rectRounded', color:'#5B6660', font:{size:12}}},
-          tooltip:{callbacks:{ title:i=>rows[i[0].dataIndex].full, label:tipKg }} },
+        plugins:{ legend:{position:'top', align:'end', labels:{boxWidth:10, boxHeight:10, usePointStyle:true, pointStyle:'rectRounded', color:'#5B6660', font:{size:12}, sort:(a,b)=>a.datasetIndex-b.datasetIndex}},
+          tooltip:{itemSort:(a,b)=>a.datasetIndex-b.datasetIndex, callbacks:{ title:i=>rows[i[0].dataIndex].full, label:tipKg }} },
         scales:{ x:xOpts, y:yOpts } }
     }));
     pcCharts.push(new Chart(document.getElementById('pcBalChart'), {
@@ -2921,9 +2931,9 @@ function renderPcAnalytics(){
     }));
   }
   const unknown = rows.some(r=>r.endBal==null && r.start<=todayISO());
-  document.getElementById('pcBalNote').textContent = unknown
+  document.getElementById('pcBalNote').textContent = (unknown
     ? 'Остаток до последней ручной корректировки не восстанавливается — эти периоды пропущены.'
-    : 'Остаток восстановлен от текущего по приходам и расходам.';
+    : 'Остаток восстановлен от текущего по приходам и расходам.') + pcYoyNote(p.id);
 
   const tb = document.querySelector('#pcPeriodTable tbody');
   const shown = rows.slice().reverse().filter(r=>r.inn||r.out||r.corr||pcState.gran==='month');
@@ -2938,8 +2948,10 @@ function renderPcAnalytics(){
       <td class="num">${net?(net>0?'+':'')+fmt(net).toLocaleString():'—'}</td>
       <td class="num">${r.endBal==null?'—':fmt(r.endBal).toLocaleString()}</td>
       <td class="num" style="color:var(--text-2)">${d===null?'—':(d>=0?'▲ +':'▼ −')+Math.abs(d)+'%'}</td>
+      ${yoyOn ? (()=>{ const py = pcPrevOut(yoy, r); const yd = py>0 ? Math.round((r.out-py)/py*100) : null;
+        return `<td class="num pc-yoy-col">${py?fmt(py).toLocaleString():'—'}</td><td class="num pc-yoy-col" style="color:var(--text-2)">${yd===null?'—':(yd>=0?'▲ +':'▼ −')+Math.abs(yd)+'%'}</td>`; })() : ''}
     </tr>`;
-  }).join('') : '<tr><td colspan="6" class="empty">Нет движений за этот период</td></tr>';
+  }).join('') : '<tr><td colspan="8" class="empty">Нет движений за этот период</td></tr>';
 }
 
 function renderPcMoves(){
@@ -3051,4 +3063,336 @@ async function afterProductCardSave(){
   await Promise.all([loadProducts(), loadStockLog()]);
   fillProductSelects();
   renderProducts(); renderLevels(); renderForecast(); applyOrderFilters(); renderDashboard();
+}
+
+
+// ---------------------------------------------------------------
+// USER NAMES (для «Кто» в History и журнале)
+// ---------------------------------------------------------------
+let profileNames = {};
+async function loadProfileNames(){
+  const { data } = await sb.from('profiles').select('id, full_name, role');
+  profileNames = {};
+  (data||[]).forEach(r=>{ profileNames[r.id] = r.full_name || r.id.slice(0,8); });
+}
+function userName(id){ return id ? (profileNames[id] || id.slice(0,8)) : '—'; }
+function escHtml(v){ return String(v==null?'':v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// ---------------------------------------------------------------
+// СРАВНЕНИЕ С ПРОШЛЫМ ГОДОМ (карточка товара → Аналитика)
+// ---------------------------------------------------------------
+const PC_PREV = '#3F4A45';    // прошлый год — нейтральная пунктирная линия
+const pcPrevYear = {};        // pid → { out:{'01':kg,…}, inn:{…}, total, ytdOut } | null
+
+async function loadPcPrevYear(pid){
+  pcPrevYear[pid] = { loading:true, out:{}, inn:{}, total:0, ytdOut:0 };
+  const y = new Date().getFullYear() - 1;
+  const todayMD = todayISO().slice(5);
+  const res = { out:{}, inn:{}, total:0, ytdOut:0, mtd:0 };
+  try{
+    for(let from=0;;from+=1000){
+      const { data, error } = await sb.from('stock_log').select('date, operation, quantity')
+        .eq('product_id', pid).in('operation',['add','deduct'])
+        .gte('date', y+'-01-01').lte('date', y+'-12-31').order('id').range(from, from+999);
+      if(error) throw error;
+      (data||[]).forEach(r=>{
+        const m = r.date.slice(5,7), q = Number(r.quantity)||0;
+        const bucket = r.operation==='add' ? res.inn : res.out;
+        bucket[m] = (bucket[m]||0) + q;
+        if(r.operation==='deduct'){ res.total += q; if(r.date.slice(5) <= todayMD) res.ytdOut += q; if(m===todayMD.slice(0,2) && r.date.slice(5) <= todayMD) res.mtd += q; }
+      });
+      if(!data || data.length<1000) break;
+    }
+    pcPrevYear[pid] = res;
+  }catch(e){ pcPrevYear[pid] = null; }
+  if(pcState.pid===pid && pcState.tab==='analytics' && !document.getElementById('productCardModal').classList.contains('hidden')) renderPcAnalytics();
+}
+
+// подпись под «Расход с начала года»: сравнение с тем же периодом прошлого года
+function pcYoySub(pid, ytdOut){
+  const d = pcPrevYear[pid], y = new Date().getFullYear() - 1;
+  if(!d || d.loading || !(d.ytdOut>0)) return '';
+  const pct = Math.round((ytdOut-d.ytdOut)/d.ytdOut*100);
+  return (pct>=0?'▲ +':'▼ −')+Math.abs(pct)+'% к '+y+' ('+fmt(d.ytdOut).toLocaleString()+' кг)';
+}
+function pcYoyNote(pid){
+  const d = pcPrevYear[pid], y = new Date().getFullYear() - 1;
+  if(d===undefined || (d && d.loading)) return '';
+  if(d===null) return ' Сравнение с '+y+' годом не загрузилось.';
+  if(!(d.total>0)) return ' Сравнение с '+y+' годом появится, когда в базе будет история за '+y+' год.';
+  return pcState.gran==='month' ? ' Пунктир — расход за тот же месяц '+y+' года; текущий месяц сравнивается с теми же числами.' : ' Сравнение с '+y+' годом — в режиме «По месяцам».';
+}
+// расход год назад для строки периода; для неполного текущего месяца — только по сегодняшнее число
+function pcPrevOut(yoy, r){
+  const m = r.start.slice(5,7);
+  return r.partial ? (yoy.mtd||0) : (yoy.out[m]||0);
+}
+
+// ---------------------------------------------------------------
+// ЖУРНАЛ ИЗМЕНЕНИЙ
+// ---------------------------------------------------------------
+const AUDIT_FIELDS = {
+  name:'Название', type:'Тип', width_cm:'Ширина, см', ply:'Слои', gsm:'GSM', priority:'Приоритет',
+  manual_monthly_rate:'Ручная норма, кг/мес', target_months:'Цель запаса, мес', composition:'Состав',
+  balance:'Остаток, кг', note:'Комментарий', contact:'Контакт', phone:'Телефон', email:'Email', notes:'Заметки',
+  product_id:'Товар', supplier_id:'Поставщик', quantity:'Количество, кг', plate_no:'Номер машины',
+  expected_date:'Ожидаемая дата', status:'Статус', arrived_at:'Получено'
+};
+const AUDIT_ACTIONS = { insert:'Создано', update:'Изменено', delete:'Удалено', balance:'Остаток' };
+const AUDIT_TABLES  = { products:'Товар', deliveries:'Поставка', suppliers:'Поставщик' };
+let auditRows = [], auditPage = 0, auditHasMore = false;
+const AUDIT_PAGE = 200;
+
+function auditVal(field, v){
+  if(v===null || v===undefined || v==='') return '—';
+  if(field==='priority') return ({high:'🔴 High', medium:'🟠 Medium', low:'⚪ Low'})[v] || v;
+  if(field==='status') return ({pending:'в пути', arrived:'получено'})[v] || v;
+  if(field==='product_id'){ const p = products.find(x=>x.id===Number(v)); return p ? productLabel(p) : '#'+v; }
+  if(field==='supplier_id'){ const sp = suppliers.find(x=>x.id===Number(v)); return sp ? sp.name : '#'+v; }
+  if(field==='arrived_at') return String(v).slice(0,16).replace('T',' ');
+  if(typeof v==='number') return fmt(v).toLocaleString();
+  return String(v);
+}
+function auditChangesHtml(r){
+  const ch = r.changes || {};
+  const keys = Object.keys(ch).sort((a,b)=> (a==='note') - (b==='note'));
+  if(!keys.length) return '<span class="pc-note">—</span>';
+  return keys.map(k=>{
+    const o = ch[k]?.old, n = ch[k]?.new, lbl = AUDIT_FIELDS[k] || k;
+    if(k==='note') return `<span class="chg"><b>${lbl}:</b> ${escHtml(n)}</span>`;
+    if(r.action==='insert') return `<span class="chg"><b>${lbl}:</b> <span class="new">${escHtml(auditVal(k,n))}</span></span>`;
+    if(r.action==='delete') return `<span class="chg"><b>${lbl}:</b> <span class="old">${escHtml(auditVal(k,o))}</span></span>`;
+    let delta = '';
+    if(typeof o==='number' && typeof n==='number' && o!==n){ const d = n-o; delta = ` <span class="pc-note" style="display:inline">(${d>0?'+':'−'}${fmt(Math.abs(d)).toLocaleString()})</span>`; }
+    return `<span class="chg"><b>${lbl}:</b> <span class="old">${escHtml(auditVal(k,o))}</span> → <span class="new">${escHtml(auditVal(k,n))}</span>${delta}</span>`;
+  }).join('');
+}
+function auditWhen(at){
+  const d = new Date(at);
+  return d.toLocaleDateString('ru-RU')+' <span style="color:var(--text-3)">'+d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})+'</span>';
+}
+
+async function loadAudit(reset){
+  if(reset){ auditRows = []; auditPage = 0; }
+  const days = Number(document.getElementById('auditPeriod')?.value||30);
+  let q = sb.from('audit_log').select('*').order('at',{ascending:false}).range(auditPage*AUDIT_PAGE, auditPage*AUDIT_PAGE+AUDIT_PAGE-1);
+  if(days>0) q = q.gte('at', new Date(Date.now()-days*86400000).toISOString());
+  const { data, error } = await q;
+  const tb = document.querySelector('#auditTableEl tbody');
+  if(error){
+    tb.innerHTML = `<tr><td colspan="5" class="empty">${/audit_log/.test(error.message) ? 'Журнал ещё не включён — выполните в Supabase скрипт <b>migration_alerts_audit.sql</b>.' : escHtml(error.message)}</td></tr>`;
+    document.getElementById('auditMoreBtn').classList.add('hidden');
+    return;
+  }
+  auditRows = auditRows.concat(data||[]);
+  auditHasMore = (data||[]).length === AUDIT_PAGE;
+  auditPage++;
+  const users = [...new Set(auditRows.map(r=>r.user_name).filter(Boolean))].sort();
+  const sel = document.getElementById('auditUser'), cur = sel.value;
+  sel.innerHTML = '<option value="">Все пользователи</option>' + users.map(u=>`<option ${u===cur?'selected':''}>${escHtml(u)}</option>`).join('');
+  renderAudit();
+}
+
+function renderAudit(){
+  const tb = document.querySelector('#auditTableEl tbody'); if(!tb) return;
+  const search = (document.getElementById('auditSearch').value||'').toLowerCase().trim();
+  const tbl = document.getElementById('auditTable').value;
+  const usr = document.getElementById('auditUser').value;
+  let rows = auditRows;
+  if(tbl==='balance') rows = rows.filter(r=>r.action==='balance');
+  else if(tbl==='products') rows = rows.filter(r=>r.table_name==='products' && r.action!=='balance');
+  else if(tbl) rows = rows.filter(r=>r.table_name===tbl);
+  if(usr) rows = rows.filter(r=>r.user_name===usr);
+  if(search) rows = rows.filter(r=>{
+    const hay = (r.row_label+' '+r.user_name+' '+Object.keys(r.changes||{}).map(k=>(AUDIT_FIELDS[k]||k)+' '+JSON.stringify(r.changes[k])).join(' ')).toLowerCase();
+    return hay.includes(search);
+  });
+  document.getElementById('auditCount').textContent = rows.length+' записей'+(auditHasMore ? ' (загружены последние '+auditRows.length+')' : '');
+  document.getElementById('auditMoreBtn').classList.toggle('hidden', !auditHasMore);
+  if(!rows.length){ tb.innerHTML = '<tr><td colspan="5" class="empty">Нет изменений за выбранный период</td></tr>'; return; }
+  tb.innerHTML = rows.map(r=>{
+    const isProd = r.table_name==='products' && products.some(p=>p.id===r.row_id);
+    return `<tr ${isProd?`data-pcard="${r.row_id}" style="cursor:pointer"`:''}>
+      <td data-sort="${r.at}" style="white-space:nowrap">${auditWhen(r.at)}</td>
+      <td>${escHtml(r.user_name||'—')}</td>
+      <td><span class="act act-${r.action}">${AUDIT_ACTIONS[r.action]||r.action}</span></td>
+      <td class="obj"><span class="pc-note" style="display:block;margin:0">${AUDIT_TABLES[r.table_name]||r.table_name}</span>${escHtml(r.row_label||('#'+r.row_id))}</td>
+      <td>${auditChangesHtml(r)}</td>
+    </tr>`;
+  }).join('');
+}
+
+async function renderPcChanges(){
+  const host = document.getElementById('pcChanges');
+  const pid = pcState.pid;
+  host.innerHTML = '<div class="empty" style="padding:10px">Загрузка…</div>';
+  const { data, error } = await sb.from('audit_log').select('*').eq('table_name','products').eq('row_id', pid).order('at',{ascending:false}).limit(200);
+  if(pcState.pid!==pid) return;
+  if(error){ host.innerHTML = `<div class="empty" style="padding:10px">${/audit_log/.test(error.message) ? 'Журнал ещё не включён — выполните в Supabase скрипт migration_alerts_audit.sql.' : escHtml(error.message)}</div>`; return; }
+  host.innerHTML = (data||[]).length ? data.map(r=>`<div class="pc-chg">
+      <div class="pc-chg-h"><span>${auditWhen(r.at)}</span><span>·</span><b style="color:var(--text)">${escHtml(r.user_name||'—')}</b><span class="act act-${r.action}">${AUDIT_ACTIONS[r.action]||r.action}</span></div>
+      ${auditChangesHtml(r)}
+    </div>`).join('') : '<div class="empty" style="padding:10px">Изменений пока не было. Журнал пишется с момента включения.</div>';
+}
+
+// ---------------------------------------------------------------
+// СЕРВИС: резервная копия + уведомления на почту
+// ---------------------------------------------------------------
+function loadScript(src){
+  return new Promise((ok, fail)=>{
+    if(document.querySelector(`script[src="${src}"]`) && window.XLSX) return ok();
+    const s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = ()=>fail(new Error('не удалось загрузить '+src));
+    document.head.appendChild(s);
+  });
+}
+async function fetchAllRows(table, select, order='id'){
+  const out = [];
+  for(let from=0;;from+=1000){
+    const { data, error } = await sb.from(table).select(select).order(order).range(from, from+999);
+    if(error) throw new Error(table+': '+error.message);
+    out.push(...(data||[]));
+    if(!data || data.length<1000) break;
+  }
+  return out;
+}
+
+async function downloadBackup(){
+  const btn = document.getElementById('backupBtn'), st = document.getElementById('backupStatus');
+  btn.disabled = true;
+  const say = t=>{ st.textContent = t; };
+  try{
+    say('Загружаю библиотеку Excel…');
+    await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+    const parts = {};
+    const tables = [
+      ['products','*'], ['stock_log','*'], ['deliveries','*'], ['reservations','*'], ['suppliers','*'], ['profiles','id, full_name, role, created_at']
+    ];
+    for(const [t,sel] of tables){ say('Читаю '+t+'…'); parts[t] = await fetchAllRows(t, sel); }
+    try{ say('Читаю журнал изменений…'); parts.audit_log = await fetchAllRows('audit_log','*'); }catch(e){ parts.audit_log = null; }
+
+    const pmap = {}; parts.products.forEach(p=>{ pmap[p.id] = p; });
+    const smap = {}; parts.suppliers.forEach(x=>{ smap[x.id] = x.name; });
+    const umap = {}; parts.profiles.forEach(x=>{ umap[x.id] = x.full_name; });
+    const pl = id=>{ const p = pmap[id]; return p ? p.name : ''; };
+    const pfmt = id=>{ const p = pmap[id]; return p ? (p.width_cm??'')+'cm·'+p.ply+'ply·'+(p.gsm??'')+'gsm' : ''; };
+    const ptype = id=> pmap[id]?.type || '';
+    const num = v=> v==null || v==='' ? null : Number(v);
+    const dt = v=> v ? String(v).replace('T',' ').slice(0,19) : '';
+    const OP = {add:'Приход', deduct:'Расход', update:'Установлен остаток'};
+
+    const sheets = [
+      ['Товары', parts.products.map(p=>({ 'ID':p.id, 'Название':p.name, 'Тип':p.type, 'Ширина, см':num(p.width_cm), 'Слои':p.ply, 'GSM':num(p.gsm),
+        'Остаток, кг':num(p.balance), 'Приоритет':p.priority||'', 'Ручная норма, кг/мес':num(p.manual_monthly_rate), 'Цель запаса, мес':num(p.target_months),
+        'Состав':p.composition||'', 'Создан':dt(p.created_at) }))],
+      ['История движений', parts.stock_log.map(r=>({ 'ID':r.id, 'Дата':r.date, 'ID товара':r.product_id, 'Товар':pl(r.product_id), 'Формат':pfmt(r.product_id), 'Тип':ptype(r.product_id),
+        'Операция':OP[r.operation]||r.operation, 'Код операции':r.operation, 'Количество, кг':num(r.quantity), 'Примечание':r.note||'', 'Пользователь':umap[r.user_id]||'', 'Записано':dt(r.created_at) }))],
+      ['Поставки', parts.deliveries.map(d=>({ 'ID':d.id, 'ID товара':d.product_id, 'Товар':pl(d.product_id), 'Формат':pfmt(d.product_id), 'Тип':ptype(d.product_id),
+        'Поставщик':smap[d.supplier_id]||'', 'Количество, кг':num(d.quantity), 'Машина':d.plate_no||'', 'Ожидается':d.expected_date||'',
+        'Статус':d.status==='arrived'?'получено':'в пути', 'Создано':dt(d.created_at), 'Получено':dt(d.arrived_at) }))],
+      ['Резервы', parts.reservations.map(r=>({ 'ID':r.id, 'Дата':r.date, 'ID товара':r.product_id, 'Товар':pl(r.product_id), 'Формат':pfmt(r.product_id), 'Тип':ptype(r.product_id),
+        'Количество, кг':num(r.quantity), 'Факт, кг':num(r.actual_qty), 'Куда':r.destination||'', 'Примечание':r.note||'',
+        'Статус':({reserved:'в резерве', confirmed:'подтверждён', cancelled:'отменён'})[r.status]||r.status,
+        'Зарезервировал':umap[r.reserved_by]||'', 'Закрыл':umap[r.closed_by]||'', 'Закрыто':dt(r.closed_at), 'Создано':dt(r.created_at) }))],
+      ['Поставщики', parts.suppliers.map(x=>({ 'ID':x.id, 'Название':x.name, 'Контакт':x.contact||'', 'Телефон':x.phone||'', 'Email':x.email||'', 'Заметки':x.notes||'', 'Создан':dt(x.created_at) }))],
+      ['Пользователи', parts.profiles.map(x=>({ 'Имя':x.full_name, 'Роль':x.role, 'Создан':dt(x.created_at) }))]
+    ];
+    if(parts.audit_log) sheets.push(['Журнал изменений', parts.audit_log.map(r=>({ 'Когда':dt(r.at), 'Кто':r.user_name, 'Объект':AUDIT_TABLES[r.table_name]||r.table_name,
+      'ID':r.row_id, 'Название':r.row_label, 'Действие':AUDIT_ACTIONS[r.action]||r.action,
+      'Изменения':Object.keys(r.changes||{}).map(k=>(AUDIT_FIELDS[k]||k)+': '+auditVal(k,r.changes[k]?.old)+' → '+auditVal(k,r.changes[k]?.new)).join('; ') }))]);
+
+    say('Собираю файл…');
+    const wb = XLSX.utils.book_new();
+    const summary = [['SoftStock — резервная копия'], ['Создана', new Date().toLocaleString('ru-RU')], ['Кем', myProfile?.full_name||me?.email||''], [],
+      ['Лист','Строк']].concat(sheets.map(([n,rows])=>[n, rows.length]))
+      .concat([[], ['Всего на складе, кг', parts.products.reduce((a,p)=>a+Math.max(0,Number(p.balance)||0),0)]]);
+    const ws0 = XLSX.utils.aoa_to_sheet(summary); ws0['!cols'] = [{wch:28},{wch:22}];
+    XLSX.utils.book_append_sheet(wb, ws0, 'Сводка');
+    sheets.forEach(([name, rows])=>{
+      const ws = rows.length ? XLSX.utils.json_to_sheet(rows) : XLSX.utils.aoa_to_sheet([['нет данных']]);
+      if(rows.length){
+        const keys = Object.keys(rows[0]);
+        ws['!cols'] = keys.map(k=>({ wch: Math.min(60, Math.max(k.length+2, ...rows.slice(0,300).map(r=>String(r[k]??'').length+1))) }));
+        ws['!autofilter'] = { ref: XLSX.utils.encode_range({s:{r:0,c:0}, e:{r:rows.length, c:keys.length-1}}) };
+        ws['!freeze'] = { xSplit:0, ySplit:1 };
+      }
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    });
+    const stamp = new Date(); const pad = n=>String(n).padStart(2,'0');
+    const fname = `SoftStock_backup_${stamp.getFullYear()}-${pad(stamp.getMonth()+1)}-${pad(stamp.getDate())}_${pad(stamp.getHours())}${pad(stamp.getMinutes())}.xlsx`;
+    XLSX.writeFile(wb, fname);
+    say('Готово: '+fname+' · '+sheets.map(([n,r])=>n+' '+r.length).join(' · ')+(parts.audit_log?'':' · журнал изменений не включён'));
+    toast('Резервная копия скачана ✓');
+  }catch(e){
+    say('Ошибка: '+e.message); toast('Резервная копия не создана: '+e.message, true);
+  }finally{ btn.disabled = false; }
+}
+
+async function renderService(){
+  const isAdmin = myProfile?.role==='admin';
+  ['set-email','set-days-high','set-days-medium','set-alerts','set-summary','svcSaveBtn'].forEach(id=>{ const el = document.getElementById(id); if(el) el.disabled = !isAdmin; });
+  document.querySelectorAll('#pane-service .notify-btn').forEach(b=>b.disabled = !isAdmin);
+  document.getElementById('svcError').textContent = isAdmin ? '' : 'Настройки уведомлений меняет только администратор.';
+  const { data, error } = await sb.from('app_settings').select('key,value');
+  if(error){ document.getElementById('svcError').textContent = 'Уведомления ещё не включены — выполните в Supabase скрипт migration_alerts_audit.sql.'; return; }
+  const st = {}; (data||[]).forEach(r=>{ st[r.key] = r.value; });
+  document.getElementById('set-email').value = st.alert_email ?? '';
+  document.getElementById('set-days-high').value   = st.alert_days_high ?? 14;
+  document.getElementById('set-days-medium').value = st.alert_days_medium ?? 7;
+  document.getElementById('set-alerts').value  = st.alerts_enabled  === 'false' ? 'false' : 'true';
+  document.getElementById('set-summary').value = st.summary_enabled === 'false' ? 'false' : 'true';
+}
+
+async function saveAlertSettings(){
+  const err = document.getElementById('svcError'); err.textContent = '';
+  const hi = parseInt(document.getElementById('set-days-high').value), md = parseInt(document.getElementById('set-days-medium').value);
+  if(!(hi>=0) || !(md>=0)){ err.textContent = 'Укажите число дней.'; return; }
+  const emails = document.getElementById('set-email').value.split(/[,;\s]+/).map(x=>x.trim()).filter(Boolean);
+  const bad = emails.filter(x=>!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+  if(!emails.length){ err.textContent = 'Укажите хотя бы один адрес почты.'; return; }
+  if(bad.length){ err.textContent = 'Неверный адрес: '+bad.join(', '); return; }
+  const now = new Date().toISOString();
+  const rows = [
+    {key:'alert_days_high', value:String(hi), updated_at:now}, {key:'alert_days_medium', value:String(md), updated_at:now},
+    {key:'alert_email', value:emails.join(', '), updated_at:now},
+    {key:'alerts_enabled', value:document.getElementById('set-alerts').value, updated_at:now},
+    {key:'summary_enabled', value:document.getElementById('set-summary').value, updated_at:now}
+  ];
+  const { data, error } = await sb.from('app_settings').upsert(rows, {onConflict:'key'}).select('key');
+  if(error){ err.textContent = error.message; return; }
+  if(!data || data.length<rows.length){ err.textContent = 'Не сохранено: менять настройки может только администратор.'; return; }
+  toast('Настройки уведомлений сохранены ✓');
+}
+
+async function notifyCall(mode){
+  const err = document.getElementById('svcError'), st = document.getElementById('svcStatus'), pv = document.getElementById('svcPreview');
+  err.textContent = ''; st.textContent = mode==='preview' ? 'Собираю письмо…' : 'Отправляю…';
+  if(mode!=='preview') pv.classList.add('hidden');
+  try{
+    const { data: { session } } = await sb.auth.getSession();
+    const res = await fetch('/.netlify/functions/email-alerts', {
+      method:'POST', headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+(session?.access_token||'')},
+      body: JSON.stringify({mode})
+    });
+    const text = await res.text();
+    let j; try{ j = JSON.parse(text); }catch(e){ throw new Error(res.status===404 ? 'функция email-alerts не найдена на сайте — загрузите netlify/functions/email-alerts.js и передеплойте' : 'сервер вернул не-JSON (HTTP '+res.status+')'); }
+    if(!j.success) throw new Error(j.error||('HTTP '+res.status));
+    st.textContent = '';
+    const to = (j.to||[]).join(', ');
+    if(mode==='test') toast('Тестовое письмо отправлено ✓ '+to);
+    else if(mode==='summary') toast('Сводка отправлена ✓ '+to);
+    else if(mode==='alerts') toast(j.sent==='alerts' ? `Отправлено: закончились ${j.newOut}, заканчиваются ${j.newLow}` : 'Новых предупреждений нет — всё уже отправлялось или в порядке');
+    else if(mode==='preview'){
+      // письма собирает наш сервер (все значения экранированы); показываем в изолированном iframe
+      const frame = html=>`<iframe sandbox="allow-same-origin" loading="eager" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+24)+'px'}catch(e){}" style="width:100%;border:1px solid var(--border);border-radius:6px;background:#fff;height:420px;display:block" srcdoc="${escHtml(html)}"></iframe>`;
+      const warn = [];
+      if(!j.configured.resend) warn.push('нет RESEND_API_KEY в Netlify');
+      if(!j.configured.to.length) warn.push('не указан адрес получателя');
+      pv.innerHTML = (warn.length ? `<b style="color:var(--red)">Отправка не настроена: ${warn.join(', ')}</b>\n\n` : `<span class="pc-note" style="margin:0">Получатели: ${escHtml(j.configured.to.join(', '))}</span>\n\n`)
+        + `<h4>Утренняя сводка — «${escHtml(j.summarySubject)}»</h4>${frame(j.summary)}`
+        + `\n\n<h4>Новые предупреждения при следующей проверке</h4>` + (j.alerts ? `«${escHtml(j.alertsSubject)}»\n${frame(j.alerts)}` : 'нет — всё уже отправлялось или в порядке');
+      pv.classList.remove('hidden');
+    }
+  }catch(e){
+    st.textContent = ''; err.textContent = 'Ошибка: '+e.message;
+  }
 }
