@@ -5,6 +5,10 @@
 [functions]
   directory = "netlify/functions"
 
+# Уведомления на почту: проверка каждый час, сводка — в 9:00 по Еревану
+[functions."email-cron"]
+  schedule = "@hourly"
+
 [[headers]]
   for = "/*"
   [headers.values]
