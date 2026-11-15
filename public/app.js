@@ -3457,10 +3457,12 @@ function ssNum(v){
   // «12 400,5» / «12,400.5» / «12.400,5»
   let t = s.replace(/[^\d.,\-]/g,'');
   if(/,\d{1,2}$/.test(t) && t.indexOf('.')>-1 && t.indexOf('.')<t.lastIndexOf(',')) t = t.replace(/\./g,'').replace(',', '.');
-  else if(/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g,'');
+  else if(/^\d{1,3}(,\d{3}){2,}(\.\d+)?$/.test(t) || /^\d{1,3},\d{3}\.\d+$/.test(t)) t = t.replace(/,/g,'');   // 1,234,567 / 1,234.5
   else t = t.replace(',', '.');
   return parseFloat(t);
 }
+// ячейка — число (а не текст, в котором есть цифры)
+function ssIsNum(c){ return typeof c==='number' || /^[\s\u00a0]*-?[\d\s\u00a0]+([.,]\d+)?[\s\u00a0]*$/.test(String(c)) && /\d/.test(String(c)); }
 const ssKnownWidths = ()=> new Set(products.map(p=>Number(p.width_cm)).filter(x=>x>0));
 function ssResolveWidth(w, unit){
   if(!(w>0)) return null;
@@ -3476,9 +3478,12 @@ function ssParseFormat(text){
   const t = String(text||'').replace(/,/g,'.');
   let width=null, ply=null, gsm=null, m;
   if((m = t.match(/(\d+(?:\.\d+)?)\s*(mm|мм)(?![a-zа-яё])/i))) width = ssResolveWidth(parseFloat(m[1]),'mm');
+  else if((m = t.match(/(?:формат|ширина|width|format)\s*[:=]?\s*(\d{2,4}(?:\.\d+)?)/i))) width = ssResolveWidth(parseFloat(m[1]), parseFloat(m[1])>=200 ? 'mm' : undefined);
   else if((m = t.match(/(\d+(?:\.\d+)?)\s*(cm|см)(?![a-zа-яё])/i))) width = ssResolveWidth(parseFloat(m[1]),'cm');
-  if((m = t.match(/([1-4])\s*-?\s*(ply|pl(?![a-z])|сло|сл(?![a-zа-яё])|layer|շերտ)/i))) ply = parseInt(m[1]);
+  if((m = t.match(/(?:слойност\S*|слоев|слоёв|ply|layers?)\s*[:=]\s*([1-4])(?!\d)/i))) ply = parseInt(m[1]);
+  else if((m = t.match(/([1-4])\s*-?\s*(ply|pl(?![a-z])|сло|сл(?![a-zа-яё])|layer|շերտ)/i))) ply = parseInt(m[1]);
   if((m = t.match(/(\d+(?:\.\d+)?)\s*(gsm|g\/m|г\/м|гр(?![a-zа-яё])|gr(?![a-z])|գր)/i))) gsm = parseFloat(m[1]);
+  else if((m = t.match(/(?:плотност\S*|gsm|grammage)\s*[:=]?\s*(\d{1,2}(?:\.\d+)?)/i))) gsm = parseFloat(m[1]);
   if((width==null || ply==null || gsm==null) && (m = t.match(/(\d{2,4}(?:\.\d+)?)\s*[\/x×*\-]\s*([1-4])\s*[\/x×*\-]\s*(\d{1,2}(?:\.\d+)?)/i))){
     if(width==null) width = ssResolveWidth(parseFloat(m[1]));
     if(ply==null) ply = parseInt(m[2]);
@@ -3487,11 +3492,11 @@ function ssParseFormat(text){
   return { width, ply, gsm };
 }
 const SS_HDR = {
-  name:  /наимен|назван|товар|продук|product|name|item|описан|descr|անվան|ապրանք/i,
+  name:  /наимен|назван|товар|продук|номенкл|product|name|item|описан|descr|row labels|անվան|ապրանք/i,
   width: /ширин|width|формат|size|լայն|^\s*(mm|мм|см|cm)\s*$/i,
   ply:   /сло[йи]|ply|layer|շերտ/i,
   gsm:   /gsm|плотн|г\/м|grammage|density|գրամ/i,
-  qty:   /кол|qty|quant|вес|weight|net|нетто|\bкг\b|\bkg\b|тонн|\bton|остат|stock|налич|ready|готов|մնացորդ|քաշ|քանակ/i
+  qty:   /кол|qty|quant|вес|weight|net|нетто|кг|\bkg\b|тонн|\bton|остат|stock|налич|ready|готов|запас|сумма|итого по|մնացորդ|քաշ|քանակ/i
 };
 function ssRowsFromTable(aoa){
   aoa = (aoa||[]).map(r=>(r||[]).map(c=>c==null?'':c)).filter(r=>r.some(c=>String(c).trim()!==''));
@@ -3504,12 +3509,16 @@ function ssRowsFromTable(aoa){
       for(const k of ['qty','gsm','ply','width','name']) if(c[k]==null && SS_HDR[k].test(s)){ c[k]=j; break; } });
     if(Object.keys(c).length>=2 && c.qty!=null){ hdrIdx = i; cols = c; break; }
   }
-  let unit = 'kg';
-  if(hdrIdx>=0 && /тонн|\bton|\(т\)|,\s*т\b|\bt\b/i.test(String(aoa[hdrIdx][cols.qty]))) unit = 't';
+  let unit = '', hdrQty = hdrIdx>=0 ? String(aoa[hdrIdx][cols.qty]) : '';
+  if(/тонн|\bton|\(т\)|,\s*т(?![а-яё])|\bt\b/i.test(hdrQty)) unit = 't';
+  else if(/кг|\bkg\b/i.test(hdrQty)) unit = 'kg';
   const rows = [];
   const body = hdrIdx>=0 ? aoa.slice(hdrIdx+1) : aoa;
   body.forEach(r=>{
-    const texts = r.filter(c=>typeof c!=='number' && String(c).trim()!=='' && isNaN(ssNum(c))).map(String);
+    // строка-группа сводной таблицы («1200») — только число, без текста
+    const filled = r.filter(c=>String(c).trim()!=='');
+    if(filled.length===1 && ssIsNum(filled[0])) return;
+    const texts = r.filter(c=>String(c).trim()!=='' && !ssIsNum(c)).map(String);
     let raw = hdrIdx>=0 && cols.name!=null ? String(r[cols.name]||'') : texts.join(' ');
     let fmtSrc = r.map(String).join(' ');
     const f = ssParseFormat(hdrIdx>=0 && cols.name!=null ? raw : fmtSrc);
@@ -3521,23 +3530,59 @@ function ssRowsFromTable(aoa){
     }
     let qty = NaN;
     if(hdrIdx>=0) qty = ssNum(r[cols.qty]);
-    else { const nums = r.map(ssNum).filter(x=>!isNaN(x)); qty = nums.length ? nums[nums.length-1] : NaN; }
+    else { const nums = r.filter(ssIsNum).map(ssNum).filter(x=>!isNaN(x)); qty = nums.length ? nums[nums.length-1] : NaN; }
     if(!(qty>0)) return;
     if(/итог|всего|total|ընդամենը/i.test(r.map(String).join(' '))) return;
     if(!raw.trim()) raw = [f.width&&f.width+'cm', f.ply&&f.ply+'ply', f.gsm&&f.gsm+'gsm'].filter(Boolean).join(' ');
     rows.push({ raw: raw.trim(), width:f.width, ply:f.ply, gsm:f.gsm, qtyRaw: qty });
   });
-  if(hdrIdx<0 && rows.length && rows.every(r=>r.qtyRaw<=40)) unit = 't';
+  // единицы не указаны: если все количества ≤ 40 — это тонны (40 000 кг в одной строке не бывает)
+  if(!unit) unit = rows.length && rows.every(r=>r.qtyRaw<=40) ? 't' : 'kg';
+  rows.forEach(r=>{ r.typeHint = ssTypeHint(r.raw); });
   return { rows, unit };
+}
+// тип по названию у поставщика (обозначения из 1С: НП — салфеточная основа, БП — полотенца, ТБ — туалетная, БС — салфетки)
+function ssTypeHint(raw){
+  const t = ' '+String(raw||'').toLowerCase().replace(/[.,()]/g,' ')+' ';
+  if(/\s(тб|tp)\s|туалет|toilet|զ\s*թ/.test(t)) return 'Toilet Paper';
+  if(/\s(бп|bp)(\s|d\s)|полотен|towel|սրբիչ/.test(t)) return 'Towels';
+  if(/\s(нп|np)\s|facial|косметич/.test(t)) return 'Facial Tissue';
+  if(/\s(бс|bs)\s|салфет|napkin|անձեռոց/.test(t)) return 'Napkins';
+  if(/spunlace|спанлейс|нетканн/.test(t)) return 'Spunlace';
+  return '';
+}
+// цвет по названию у поставщика → армянское слово в названии нашего товара
+const SS_COLORS = [
+  [/бел|white|սպիտակ/i, 'սպիտակ'], [/красн|red|կարմիր/i, 'կարմիր'], [/бордо|bordo|burgund|բորդո/i, 'բորդո'],
+  [/син|голуб|blue|կապույտ/i, 'կապույտ'], [/желт|жёлт|yellow|դեղին/i, 'դեղին'], [/черн|чёрн|black|սև/i, 'սև'],
+  [/розов|pink|վարդագույն/i, 'վարդագույն'], [/цветн|color|գունավոր/i, 'գունավոր'], [/крафт|kraft|эко|eco|էկո/i, 'էկո']
+];
+function ssColorWord(raw){
+  const hits = SS_COLORS.filter(([re])=>re.test(String(raw||'')));
+  // «Белая» встречается и в цветных строках редко; если есть другой цвет — он важнее
+  const other = hits.find(h=>h[1]!=='սպիտակ');
+  return (other || hits[0] || [])[1] || '';
 }
 function ssAutoMatch(row){
   const same = products.filter(p=> Number(p.width_cm)===Number(row.width) && Number(p.ply)===Number(row.ply) && Number(p.gsm)===Number(row.gsm));
   if(!same.length) return { id:null, cands:[] };
+  const normN = s=>String(s||'').toLocaleLowerCase('hy');
+  const col = ssColorWord(row.raw);
+  if(col && col!=='սպիտակ'){                       // цветная бумага — только товар того же цвета
+    const colored = same.filter(p=>normN(p.name).includes(col));
+    if(!colored.length) return { id:null, cands:same };
+    if(colored.length===1) return { id:colored[0].id, cands:same };
+  }
+  const hint = row.typeHint || ssTypeHint(row.raw);
+  const byType = hint ? same.filter(p=>p.type===hint) : [];
+  if(hint && byType.length===1) return { id:byType[0].id, cands:same };
   if(same.length===1) return { id:same[0].id, cands:same };
   const norm = s=>String(s||'').toLocaleLowerCase('hy').replace(/\s+/g,' ').trim();
   const raw = norm(row.raw);
-  const byName = same.find(p=> raw && raw.includes(norm(p.name)));
-  const sorted = [...same].sort(productOrderCmp);
+  const pool = byType.length ? byType : same;
+  const color = ssColorWord(row.raw);
+  const byName = pool.find(p=> raw && raw.includes(norm(p.name))) || (color ? pool.find(p=> norm(p.name).includes(color)) : null);
+  const sorted = [...pool].sort(productOrderCmp);
   return { id:(byName||sorted[0]).id, cands:sorted };
 }
 function ssLoadRows(parsed, source){
@@ -3552,7 +3597,7 @@ function ssLoadRows(parsed, source){
 function ssTogglePaste(){ document.getElementById('ssPasteBox').classList.toggle('hidden'); }
 function ssParsePaste(){
   const text = document.getElementById('ssPaste').value;
-  const aoa = text.split(/\r?\n/).map(l=> l.includes('\t') ? l.split('\t') : (l.includes(';') ? l.split(';') : [l.replace(/\s+(\d[\d\s.,]*)\s*(кг|kg|т|t)?\s*$/i,'\t$1').split('\t')].flat()));
+  const aoa = text.split(/\r?\n/).map(l=> l.includes('\t') ? l.split('\t') : (l.includes(';') ? l.split(';') : [l.replace(/\s+(\d{1,3}(?:[ \u00a0]\d{3})*(?:[.,]\d+)?)\s*(кг|kg|т|t)?\s*$/i,'\t$1').split('\t')].flat()));
   ssLoadRows(ssRowsFromTable(aoa), 'вставка');
 }
 async function ssHandleFile(file){
