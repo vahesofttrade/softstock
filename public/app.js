@@ -2201,13 +2201,13 @@ async function cancelRes(id){
 // ---------------------------------------------------------------
 // SCANNER (shared helpers + full page + Reservations mini-scanner)
 // ---------------------------------------------------------------
-async function callScannerApi(base64, mimeType){
+async function callScannerApi(base64, mimeType, kind){
   let res;
   try{
     res = await fetch('/.netlify/functions/scan-invoice', {
       method: 'POST',
       headers: {'content-type':'application/json'},
-      body: JSON.stringify({ imageBase64: base64, mimeType })
+      body: JSON.stringify({ imageBase64: base64, mimeType, kind })
     });
   }catch(networkErr){
     return { success:false, error: 'Сеть/сервер недоступен: '+networkErr.message };
@@ -2219,6 +2219,8 @@ async function callScannerApi(base64, mimeType){
   try{
     return JSON.parse(text);
   }catch(parseErr){
+    if(res.status===504 || /Inactivity Timeout|timed out/i.test(text))
+      return { success:false, error: 'Сканер не успел за отведённое время (лимит Netlify ~26 сек) — список слишком длинный. Загрузите Excel или PDF-файл из 1С (они читаются без сканера) или сфотографируйте список частями.' };
     return { success:false, error: 'Сервер вернул не-JSON (HTTP '+res.status+'): '+text.slice(0,200) };
   }
 }
@@ -3475,7 +3477,7 @@ function ssNum(v){
   return parseFloat(t);
 }
 // ячейка — число (а не текст, в котором есть цифры)
-function ssIsNum(c){ return typeof c==='number' || /^[\s\u00a0]*-?[\d\s\u00a0]+([.,]\d+)?[\s\u00a0]*$/.test(String(c)) && /\d/.test(String(c)); }
+function ssIsNum(c){ return typeof c==='number' || /^[\s\u00a0]*-?[\d\s\u00a0]+([.,]\d+)?[\s\u00a0]*(кг|kg|тн|т|t)?\.?[\s\u00a0]*$/i.test(String(c)) && /\d/.test(String(c)); }
 const ssKnownWidths = ()=> new Set(products.map(p=>Number(p.width_cm)).filter(x=>x>0));
 function ssResolveWidth(w, unit){
   if(!(w>0)) return null;
@@ -3511,12 +3513,12 @@ const SS_HDR = {
   gsm:   /gsm|плотн|г\/м|grammage|density|գրամ/i,
   qty:   /кол|qty|quant|вес|weight|net|нетто|кг|\bkg\b|тонн|\bton|остат|stock|налич|ready|готов|запас|сумма|итого по|մնացորդ|քաշ|քանակ/i
 };
-function ssRowsFromTable(aoa){
+function ssRowsFromTable(aoa, opts={}){
   aoa = (aoa||[]).map(r=>(r||[]).map(c=>c==null?'':c)).filter(r=>r.some(c=>String(c).trim()!==''));
   if(!aoa.length) return { rows:[], unit:'kg' };
   // ищем строку заголовков в первых 15 строках
   let hdrIdx = -1, cols = {};
-  for(let i=0;i<Math.min(15,aoa.length);i++){
+  for(let i=0;i<(opts.noHeader?0:Math.min(15,aoa.length));i++){
     const c = {};
     aoa[i].forEach((v,j)=>{ const s = String(v); if(!s || typeof v==='number') return;
       for(const k of ['qty','gsm','ply','width','name']) if(c[k]==null && SS_HDR[k].test(s)){ c[k]=j; break; } });
@@ -3546,6 +3548,7 @@ function ssRowsFromTable(aoa){
     else { const nums = r.filter(ssIsNum).map(ssNum).filter(x=>!isNaN(x)); qty = nums.length ? nums[nums.length-1] : NaN; }
     if(!(qty>0)) return;
     if(/итог|всего|total|ընդամենը/i.test(r.map(String).join(' '))) return;
+    if(hdrIdx<0 && f.width==null && f.ply==null && f.gsm==null) return;   // без заголовков берём только строки с форматом
     if(!raw.trim()) raw = [f.width&&f.width+'cm', f.ply&&f.ply+'ply', f.gsm&&f.gsm+'gsm'].filter(Boolean).join(' ');
     rows.push({ raw: raw.trim(), width:f.width, ply:f.ply, gsm:f.gsm, qtyRaw: qty });
   });
@@ -3607,6 +3610,77 @@ function ssLoadRows(parsed, source){
   document.getElementById('ssPreview').classList.remove('hidden');
   ssRenderPreview();
 }
+// PDF → строки таблицы: текстовые фрагменты группируются по строкам (координата Y),
+// большой промежуток по X = новая колонка
+async function ssPdfToTable(file){
+  if(!window.pdfjsLib){
+    await loadScriptOnce('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js');
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  }
+  const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const out = [];
+  for(let pn=1; pn<=pdf.numPages; pn++){
+    const page = await pdf.getPage(pn);
+    const tc = await page.getTextContent();
+    const items = tc.items.filter(i=>i.str && i.str.trim()).map(i=>({ s:i.str, x:i.transform[4], y:i.transform[5], w:i.width||0, h:Math.abs(i.transform[3])||8 }));
+    items.sort((a,b)=> b.y-a.y || a.x-b.x);
+    const lines = [];
+    items.forEach(it=>{
+      const ln = lines.find(l=> Math.abs(l.y-it.y) <= Math.max(2, it.h*0.45));
+      if(ln) ln.items.push(it); else lines.push({ y:it.y, items:[it] });
+    });
+    lines.sort((a,b)=>b.y-a.y).forEach(l=>{
+      l.items.sort((a,b)=>a.x-b.x);
+      const cells = []; let cur = null, lastEnd = -1e9;
+      l.items.forEach(it=>{
+        const gap = it.x - lastEnd;
+        if(cur===null || gap > Math.max(10, it.h*1.2)){ cur = it.s; cells.push(cur); }
+        else cells[cells.length-1] = cells[cells.length-1] + (gap>1?' ':'') + it.s;
+        lastEnd = it.x + it.w;
+      });
+      out.push(cells.map(c=>c.trim()));
+    });
+  }
+  return ssMergeWrappedLines(out);
+}
+// Длинные названия в PDF переносятся на 2–3 строки, и количество стоит только на одной из них.
+// Склеиваем такие строки в одну запись: в счёте из 1С запись начинается с номера строки (1, 2, 3…),
+// иначе — со строки, где есть количество.
+function ssMergeWrappedLines(lines){
+  const isRowNo = c=> /^\d{1,3}\.?$/.test(String(c||'').trim());
+  const numCells = l=> l.filter((c,i)=> ssIsNum(c) && !(i===0 && isRowNo(c)));
+  // «10 Ц1-И-НС» — номер строки слипся с артикулом: отделяем (используется, только если счёт нумерованный)
+  const split = lines.map(l=>{ const m = String(l[0]||'').match(/^(\d{1,3})\.?\s+(\S.*)$/); return m && !ssIsNum(l[0]) ? [m[1], m[2], ...l.slice(1)] : l; });
+  const isNumbered = ls=>{ const q = ls.filter(l=>numCells(l).length); return q.length && q.filter(l=>isRowNo(l[0])).length >= q.length*0.6; };
+  const numbered = isNumbered(split);
+  if(numbered) lines = split;
+  const recs = []; let cur = null;
+  lines.forEach(l=>{
+    if(!numbered && l.length===1 && ssIsNum(l[0])) return;          // заголовок группы сводной таблицы («1200»)
+    if(/итог|всего|total|страница|page\s*\d|подпис|отпустил|получил/i.test(l.join(' '))){ cur = null; return; }   // подвал документа
+    const hasQty = numCells(l).length>0;
+    // нумерованный счёт: новая запись с номера строки; иначе — со строки с количеством,
+    // а строки без количества дописываются к предыдущей записи (перенос названия)
+    const starts = numbered ? (isRowNo(l[0]) && l.length>1) : (hasQty || !cur || cur.qty==null);
+    if(!cur && numbered && !starts) return;                          // текст вне записей (шапка/подвал)
+    if(starts || !cur){ cur = { text:[], qty:null }; recs.push(cur); }
+    l.forEach((c,i)=>{
+      if(numbered && starts && i===0) return;                       // номер строки
+      if(ssIsNum(c) && (numbered ? starts : hasQty)) cur.qty = c;   // количество — только со строки записи
+      else if(!/^(кг|kg|т|t|шт)\.?$/i.test(String(c).trim())) cur.text.push(c);
+    });
+  });
+  return recs.map(r=> r.qty!=null ? [r.text.join(' '), r.qty] : [r.text.join(' ')]);
+}
+const _scriptLoads = {};
+function loadScriptOnce(src){
+  if(!_scriptLoads[src]) _scriptLoads[src] = new Promise((ok, fail)=>{
+    const s = document.createElement('script'); s.src = src; s.onload = ok;
+    s.onerror = ()=>{ delete _scriptLoads[src]; fail(new Error('не удалось загрузить '+src)); };
+    document.head.appendChild(s);
+  });
+  return _scriptLoads[src];
+}
 function ssTogglePaste(){ document.getElementById('ssPasteBox').classList.toggle('hidden'); }
 function ssParsePaste(){
   const text = document.getElementById('ssPaste').value;
@@ -3619,19 +3693,34 @@ async function ssHandleFile(file){
   err.textContent = ''; st.textContent = 'Читаю файл…';
   try{
     const name = file.name.toLowerCase();
-    if(file.type.startsWith('image/') || file.type==='application/pdf' || name.endsWith('.pdf')){
-      st.textContent = 'Распознаю сканером… (10–40 сек)';
+    const isPdf = file.type==='application/pdf' || name.endsWith('.pdf');
+    if(isPdf){
+      // PDF из 1С/Excel содержит текст — читаем его прямо в браузере, без сканера
+      st.textContent = 'Читаю PDF…';
+      const aoa = await ssPdfToTable(file).catch(()=>null);
+      // в PDF колонки заголовка и строк часто не совпадают — разбираем по строкам, без заголовков
+      const parsed = aoa ? ssRowsFromTable(aoa, { noHeader:true }) : { rows:[] };
+      if(parsed.rows.length){ ssLoadRows(parsed, file.name+' (текст PDF)'); return; }
+      // в PDF нет текста (скан) — отправляем сканеру
+    }
+    if(file.type.startsWith('image/') || isPdf){
+      st.textContent = 'Распознаю сканером… (обычно 5–20 сек)';
       let base64, mime;
-      if(file.type.startsWith('image/')){ const r = await resizeImageForScan(file, 2000, 0.85); base64 = r.base64; mime = r.mimeType; }
+      if(file.type.startsWith('image/')){ const r = await resizeImageForScan(file, 1800, 0.82); base64 = r.base64; mime = r.mimeType; }
       else { base64 = await new Promise((ok,no)=>{ const fr = new FileReader(); fr.onload = ()=>ok(String(fr.result).split(',')[1]); fr.onerror = ()=>no(new Error('не удалось прочитать PDF')); fr.readAsDataURL(file); }); mime = 'application/pdf'; }
-      const res = await callScannerApi(base64, mime);
+      const res = await callScannerApi(base64, mime, 'stock');
       if(!res.success) throw new Error(res.error||'сканер не ответил');
       const rows = (res.items||[]).map(it=>{
+        if(Array.isArray(it)){   // быстрый режим: [name, width_mm, ply, gsm, kg]
+          const [nm, wmm, ply, gsm, kg] = it;
+          const f = ssParseFormat(nm||'');
+          return { raw: String(nm||''), width: f.width ?? ssResolveWidth(ssNum(wmm), 'mm'), ply: f.ply ?? (ssNum(ply)||null), gsm: f.gsm ?? (ssNum(gsm)||null), qtyRaw: ssNum(kg) };
+        }
         const f = ssParseFormat((it.name_original||'')+' '+(it.name_en||''));
-        const w = f.width ?? ssResolveWidth(ssNum(it.width_mm), 'mm');
-        return { raw: it.name_original || it.name_en || '', width:w, ply: f.ply ?? (ssNum(it.layers)||null), gsm: f.gsm ?? (ssNum(it.gsm)||null), qtyRaw: ssNum(it.net_weight_t) };
+        return { raw: it.name_original || it.name_en || '', width: f.width ?? ssResolveWidth(ssNum(it.width_mm), 'mm'), ply: f.ply ?? (ssNum(it.layers)||null), gsm: f.gsm ?? (ssNum(it.gsm)||null), qtyRaw: ssNum(it.net_weight_t)*1000 };
       }).filter(r=>r.qtyRaw>0);
-      ssLoadRows({ rows, unit:'t' }, 'сканер');
+      rows.forEach(r=>{ r.typeHint = ssTypeHint(r.raw); });
+      ssLoadRows({ rows, unit:'kg' }, 'сканер');
       return;
     }
     if(name.endsWith('.csv') || name.endsWith('.txt')){
