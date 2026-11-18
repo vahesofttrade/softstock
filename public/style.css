@@ -517,3 +517,7 @@ tr[data-pcard]:hover td{background:var(--brand-light)}
 .fc-add-stats span{font-size:10.5px;color:var(--text-2)}
 .fc-add-stats b{font-size:13px}
 #fcAddModal{position:fixed;inset:0;background:rgba(15,23,20,.45);z-index:1000;align-items:center;justify-content:center}
+.sup-cell{display:inline-flex;flex-direction:column;align-items:flex-end;line-height:1.2;cursor:help}
+.sup-cell b{color:#6d28d9}
+.sup-cell-n{font-size:10px;color:var(--text-3);font-weight:400;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#fcAddModal{z-index:2000}

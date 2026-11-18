@@ -1177,7 +1177,7 @@ function renderLevels(){
   // ---- table ----
   const rows = lvlFilteredSortedRows();
   const tbody = document.querySelector('#levelsTable tbody');
-  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="11" class="empty">Нет товаров</td></tr>'; return; }
+  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="12" class="empty">Нет товаров</td></tr>'; return; }
   tbody.innerHTML = rows.map(({p,balance,daily,usedManual,u30,days,pending})=>{
     const badge = balance===0 ? '<span class="badge badge-critical" style="margin-left:6px">ZERO</span>'
                 : balance<1000 ? '<span class="badge badge-soon" style="margin-left:6px">LOW</span>' : '';
@@ -1198,6 +1198,7 @@ function renderLevels(){
       <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
       <td class="num" style="font-weight:600">${fmt(balance).toLocaleString()}</td>
       <td>${pendingCell}</td>
+      <td class="num" data-sort="${supStockFor(p.id).total}">${supStockCellHtml(p.id)}</td>
       <td class="num" style="color:var(--text-2)">${u30>0?fmt(u30).toLocaleString():'—'}</td>
       <td class="num">${dailyCell}</td>
       <td class="num" style="font-weight:600;color:${daysColor}">${daysText}</td>
@@ -1652,6 +1653,7 @@ function orderRowHtml(r){
     <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}${p.balance==0?' <span class="badge badge-critical" style="margin-left:2px">ZERO</span>':''}</td>
     <td class="num" style="font-weight:600;color:${daysColor}">${r.daysLeft==null?'<span style="color:var(--text-3);font-weight:400">∞</span>':r.daysLeft+'d'}${urgent?' 🚨':''}</td>
     <td class="num" style="color:var(--brand)">${r.pending>0?'+'+fmt(r.pending).toLocaleString():'—'}</td>
+    <td class="num" data-sort="${supStockFor(p.id).total}">${supStockCellHtml(p.id)}</td>
     <td class="num" style="color:var(--text-2)">${r.monthly>0?fmt(r.monthly).toLocaleString()+' kg'+(r.usedManual?' <span style="font-size:10px;font-weight:600;color:var(--brand)">ручн.</span>':(orderRateMode==='manual'?' <span style="font-size:10px;color:var(--text-3)" title="Ручной нормы нет — взято взвешенное среднее">взв.</span>':'')):'—'}</td>
     <td class="num">${r.targetQty>0?fmt(r.targetQty).toLocaleString()+' kg<div style="font-size:9px;color:var(--text-3)">'+r.targetMonths+'mo</div>':'—'}</td>
     <td class="num" style="font-weight:600;color:${r.suggested>0?'var(--red)':'var(--green)'}">${r.suggested>0?fmt(r.suggested).toLocaleString()+' kg':'✓'}</td>
@@ -1672,6 +1674,7 @@ function renderOrderTable(rows){
     <th>Current</th>
     <th>Days left</th>
     <th>Incoming</th>
+    <th style="color:#6d28d9">У поставщика</th>
     <th>Monthly need</th>
     <th>Target</th>
     <th>Suggested</th>
@@ -2939,8 +2942,20 @@ function pcAggregate(gran){
   });
 }
 
+function renderPcSupStock(p){
+  const host = document.getElementById('pcSupStock'); if(!host) return;
+  const st = supStockFor(p.id);
+  if(!(st.total>0)){ host.innerHTML = ''; return; }
+  host.innerHTML = `<div class="fc-sup" style="margin:0 0 12px">
+    <div class="fc-sup-h">🏭 Готово у поставщика: ${fmt(st.total).toLocaleString()} кг</div>
+    ${st.parts.map(x=>{ const inPlan = fcPlannedQty(p.id, x.sid, x.wh);
+      return `<div class="fc-sup-r" style="font-size:12px"><span>${escHtml(x.name)}${x.asOf?` <span style="color:var(--text-3)">· на ${x.asOf.slice(8,10)}.${x.asOf.slice(5,7)}</span>`:''}${inPlan?` <span class="fc-inplan">· 🚛 в плане ${fmt(inPlan).toLocaleString()} кг</span>`:''}</span>
+        <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><b>${fmt(x.kg).toLocaleString()} кг</b>${canEdit()?`<button class="fc-add" onclick="fcAddToTruck(${p.id},${x.sid},${escHtml(JSON.stringify(x.wh))})">＋ в машину</button>`:''}</span></div>`; }).join('')}
+  </div>`;
+}
 function renderPcAnalytics(){
   const p = products.find(x=>x.id===pcState.pid); if(!p) return;
+  renderPcSupStock(p);
   document.querySelectorAll('#pcGranBar .pill').forEach(el=>el.classList.toggle('active', el.dataset.gran===pcState.gran));
   const ev = pcEvents();
   const yearStart = new Date().getFullYear()+'-01-01';
@@ -3476,6 +3491,24 @@ async function loadSupStock(){
   supStockError = error ? (/supplier_stock/.test(error.message) ? 'Таблица ещё не создана — выполните в Supabase скрипт migration_supplier_stock.sql.' : error.message) : '';
   supStock = data || [];
 }
+// ── остаток у поставщиков по товару (для Stock Levels, Orders, карточки, Forecast) ──
+function supStockFor(pid){
+  const m = {};
+  (typeof supStock!=='undefined' ? supStock : []).filter(r=>r.product_id===pid && Number(r.quantity)>0).forEach(r=>{
+    const k = r.supplier_id+'|'+(r.warehouse||'');
+    (m[k] = m[k] || { sid:r.supplier_id, wh:r.warehouse||'', kg:0, asOf:'' });
+    m[k].kg += Number(r.quantity); if((r.as_of||'')>m[k].asOf) m[k].asOf = r.as_of;
+  });
+  const parts = Object.values(m).map(x=>({ ...x, name:(suppliers.find(s=>s.id===x.sid)?.name||'?') + (x.wh ? ' · '+x.wh : '') })).sort((a,b)=>b.kg-a.kg);
+  return { total: parts.reduce((a,x)=>a+x.kg,0), parts };
+}
+function supStockCellHtml(pid){
+  const st = supStockFor(pid);
+  if(!(st.total>0)) return '<span style="color:var(--text-3)">—</span>';
+  const tip = st.parts.map(x=>x.name+': '+fmt(x.kg).toLocaleString()+' кг'+(x.asOf?' (на '+x.asOf.slice(8,10)+'.'+x.asOf.slice(5,7)+')':'')).join('\n');
+  return `<span class="sup-cell" title="${escHtml(tip)}"><b>${fmt(st.total).toLocaleString()}</b>${st.parts.length>1?`<span class="sup-cell-n">${st.parts.length} скл.</span>`:`<span class="sup-cell-n">${escHtml(st.parts[0].name)}</span>`}</span>`;
+}
+
 // ── склады поставщиков ──
 const whName = w=> (w && String(w).trim()) ? String(w).trim() : 'Основной';
 function ssSelWh(){ const el = document.getElementById('ssWh'); return el ? el.value : '__all'; }
@@ -3863,7 +3896,7 @@ async function ssSave(){
     await loadSupStock();
     ssFillWhControls(wh);
     await renderSupStock(false);
-    renderForecast();
+    renderForecast(); renderLevels(); renderOrders();
   }catch(e){ err.textContent = /warehouse/.test(e.message||'') ? 'Нужно включить склады: выполните в Supabase скрипт migration_supplier_warehouses.sql.' : 'Ошибка: '+(e.message||e); }
   finally{ btn.disabled = false; }
 }
@@ -4162,7 +4195,7 @@ async function ssCreateDeliveries(){
   toast(`Создано ${trucks.length} машин(ы), ${rows.length} строк в Deliveries ✓ · остаток поставщика уменьшен`);
   await Promise.all([loadDeliveries(), loadSupStock()]);
   ssForceOne = false; ssDropEdit(sid, ssLastPlan.wh);
-  renderSupPlan(); renderForecast();
+  renderSupPlan(); renderForecast(); renderLevels(); renderOrders();
 }
 
 async function ssExportPlan(){
@@ -4281,4 +4314,6 @@ function fcConfirmAdd(){
   toast(`Добавлено ${fmt(qty).toLocaleString()} кг → ${sup?.name||''} · ${whName(c.wh)}, машина ${[...touched].join(', ')}. Поставки создаются в «Склад поставщика».`);
   renderForecast();
   if(document.getElementById('pane-supstock')?.classList.contains('active')) renderSupPlan();
+  const pc = document.getElementById('productCardModal');
+  if(pc && !pc.classList.contains('hidden') && pcState.pid===c.pid){ const pp = products.find(x=>x.id===c.pid); if(pp) renderPcSupStock(pp); }
 }
