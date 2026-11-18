@@ -125,7 +125,7 @@ function toggleSidebar(force){
 // DATA LOADING
 // ---------------------------------------------------------------
 async function refreshAll(){
-  await Promise.all([loadProducts(), loadSuppliers(), loadDeliveries(), loadStockLog(), loadReservations(), loadProfileNames()]);
+  await Promise.all([loadProducts(), loadSuppliers(), loadDeliveries(), loadStockLog(), loadReservations(), loadProfileNames(), loadSupStock()]);
   fillProductSelects();
   fillSupplierSelect();
   renderDashboard();
@@ -1417,6 +1417,14 @@ function renderForecast(){
           </div>
           ${daysWithDelivery!==null?`<div style="margin-top:6px;padding-top:6px;border-top:1px solid #93c5fd;font-size:11px;color:#1d4ed8">⏱ С учётом поставки: <strong>${daysWithDelivery} дн.</strong></div>`:''}
         </div>` : '';
+      const supRows = (typeof supStock!=='undefined' ? supStock : []).filter(x=>x.product_id===p.id && Number(x.quantity)>0);
+      const supAgg = {}; supRows.forEach(x=>{ const sn = (suppliers.find(z=>z.id===x.supplier_id)?.name||'?') + (x.warehouse ? ' · '+x.warehouse : '');
+        (supAgg[sn] = supAgg[sn] || { kg:0, asOf:'' }); supAgg[sn].kg += Number(x.quantity); if((x.as_of||'')>supAgg[sn].asOf) supAgg[sn].asOf = x.as_of; });
+      const supTotal = Object.values(supAgg).reduce((a,v)=>a+v.kg,0);
+      const supplierSection = supTotal>0 ? `<div class="fc-sup">
+          <div class="fc-sup-h">🏭 Готово у поставщика: ${fmt(supTotal).toLocaleString()} кг</div>
+          ${Object.entries(supAgg).sort((a,b)=>b[1].kg-a[1].kg).map(([n,v])=>`<div class="fc-sup-r"><span>${escHtml(n)}${v.asOf?` <span style="color:var(--text-3)">· ${v.asOf.slice(8,10)}.${v.asOf.slice(5,7)}</span>`:''}</span><b>${fmt(v.kg).toLocaleString()} кг</b></div>`).join('')}
+        </div>` : '';
       return `<div class="fc-card" data-pcard="${p.id}" title="Открыть карточку товара" style="background:${s.bg};border-color:${s.border}">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div style="display:flex;align-items:center;gap:8px;min-width:0">
@@ -1442,6 +1450,7 @@ function renderForecast(){
         </div>
         <div style="font-size:11px;color:var(--text-2);padding:4px 0;border-top:1px solid ${s.border}">${r.urgency==='out'?'⛔ <strong>Закончился</strong> — '+(r.rate>0?'расход '+fmt(r.rate).toLocaleString()+' кг/день, ':'расхода нет, но приоритет '+(r.p.priority==='high'?'High':'Medium')+' — ')+'нужен заказ':'⏱ '+(r.daysLeft==null?'<strong>норма не задана</strong>':'<strong>'+r.daysLeft+' дн.</strong> осталось')}</div>
         ${deliverySection}
+        ${supplierSection}
       </div>`;
     }).join('');
     return `<div style="margin-bottom:24px">
@@ -3465,6 +3474,67 @@ async function loadSupStock(){
   supStockError = error ? (/supplier_stock/.test(error.message) ? 'Таблица ещё не создана — выполните в Supabase скрипт migration_supplier_stock.sql.' : error.message) : '';
   supStock = data || [];
 }
+// ── склады поставщиков ──
+const whName = w=> (w && String(w).trim()) ? String(w).trim() : 'Основной';
+function ssSelWh(){ const el = document.getElementById('ssWh'); return el ? el.value : '__all'; }
+// строки остатка выбранного поставщика и склада (или всех его складов)
+function ssRowsSel(sid, wh){
+  wh = wh===undefined ? ssSelWh() : wh;
+  return supStock.filter(r=> r.supplier_id===sid && (wh==='__all' || (r.warehouse||'')===wh));
+}
+function ssWarehousesOf(sid){
+  return [...new Set(supStock.filter(r=>r.supplier_id===sid).map(r=>r.warehouse||''))].sort((a,b)=> (a===''?-1:b===''?1:a.localeCompare(b)));
+}
+function ssSelectWh(sid, wh){
+  document.getElementById('ssSupplier').value = String(sid);
+  ssEdit = null; ssForceOne = false;
+  ssFillWhControls(wh);
+  renderSupPlan();
+  document.getElementById('ssPlan').scrollIntoView({behavior:'smooth', block:'start'});
+}
+function ssFillWhControls(prefer){
+  const sid = Number(document.getElementById('ssSupplier').value);
+  const whs = ssWarehousesOf(sid);
+  const sel = document.getElementById('ssWh'), cur = prefer!==undefined ? prefer : sel.value;
+  sel.innerHTML = (whs.length>1 ? '<option value="__all">Все склады вместе</option>' : '')
+    + whs.map(w=>`<option value="${escHtml(w)}">${escHtml(whName(w))}</option>`).join('')
+    || '<option value="__all">—</option>';
+  if([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+  else if(whs.length) sel.value = whs.length>1 ? whs[0] : whs[0];
+  document.getElementById('ssWhList').innerHTML = whs.filter(w=>w).map(w=>`<option value="${escHtml(w)}">`).join('');
+}
+function renderSupWhOverview(){
+  const host = document.getElementById('ssWhOverview'); if(!host) return;
+  const g = {};
+  supStock.forEach(r=>{ const k = r.supplier_id+'|'+(r.warehouse||''); (g[k] = g[k] || { sid:r.supplier_id, wh:r.warehouse||'', kg:0, n:0, unm:0, asOf:'' });
+    g[k].kg += Number(r.quantity||0); g[k].n++; if(!r.product_id) g[k].unm++; if((r.as_of||'') > g[k].asOf) g[k].asOf = r.as_of; });
+  const list = Object.values(g).filter(x=>x.kg>0 || x.n).sort((a,b)=>{ const sa = suppliers.find(s=>s.id===a.sid)?.name||'', sb = suppliers.find(s=>s.id===b.sid)?.name||''; return sa.localeCompare(sb) || (a.wh===''?-1:b.wh===''?1:a.wh.localeCompare(b.wh)); });
+  if(!list.length){ host.innerHTML = `<div class="empty">${supStockError ? escHtml(supStockError) : 'Пока ничего не загружено. Выберите поставщика и склад ниже и загрузите его остаток.'}</div>`; return; }
+  const sid = Number(document.getElementById('ssSupplier').value), wh = ssSelWh();
+  host.innerHTML = list.map(x=>{
+    const sup = suppliers.find(s=>s.id===x.sid);
+    const old = x.asOf && (Date.now()-new Date(x.asOf+'T00:00:00'))/86400000 > 7;
+    const active = x.sid===sid && (wh==='__all' || wh===x.wh);
+    return `<div class="ss-wh${active?' active':''}" onclick="ssSelectWh(${x.sid}, ${escHtml(JSON.stringify(x.wh))})" title="Показать машины с этого склада">
+      ${canEdit()?`<button class="ss-x" title="Очистить остаток этого склада" onclick="event.stopPropagation();ssClearWh(${x.sid}, ${escHtml(JSON.stringify(x.wh))})">🗑</button>`:''}
+      <div class="ss-wh-sup">${escHtml(sup?.name||'?')}</div>
+      <div class="ss-wh-name">🏭 ${escHtml(whName(x.wh))}</div>
+      <div class="ss-wh-meta"><b style="color:var(--text)">${fmt(x.kg).toLocaleString()} кг</b> · ${x.n} поз.${x.unm?` · <span style="color:var(--amber)">не сопост. ${x.unm}</span>`:''}</div>
+      <div class="ss-wh-meta" style="${old?'color:var(--amber)':''}">на ${x.asOf ? new Date(x.asOf+'T00:00:00').toLocaleDateString('ru-RU') : '—'}${old?' · ⚠️ старше недели':''}</div>
+    </div>`;
+  }).join('');
+}
+async function ssClearWh(sid, wh){
+  const sup = suppliers.find(s=>s.id===sid);
+  if(!confirm(`Удалить остаток склада «${whName(wh)}» поставщика ${sup?.name||''}?`)) return;
+  const { data, error } = await sb.from('supplier_stock').delete().eq('supplier_id', sid).eq('warehouse', wh).select('id');
+  if(error){ toast('Ошибка: '+error.message, true); return; }
+  if(!data || !data.length){ toast('Не удалено — нет прав', true); return; }
+  toast('Остаток склада удалён ✓');
+  ssEdit = null; await renderSupStock(true);
+  renderForecast();
+}
+
 function ssNum(v){
   if(typeof v==='number') return v;
   const s = String(v==null?'':v).replace(/ /g,' ').trim();
@@ -3768,27 +3838,31 @@ async function ssSave(){
   if(!ssPreviewRows || !ssPreviewRows.length){ err.textContent = 'Нечего сохранять.'; return; }
   const mult = document.getElementById('ssUnit').value==='t' ? 1000 : 1;
   const asOf = document.getElementById('ssAsOf').value || todayISO();
+  const wh = (document.getElementById('ssWhInput').value||'').trim().replace(/^основной$/i,'');
   const merged = {}, rows = [];
   ssPreviewRows.forEach(r=>{
     const kgv = Math.round(r.qtyRaw*mult*100)/100; if(!(kgv>0)) return;
     if(r.product_id){
       if(merged[r.product_id]){ merged[r.product_id].quantity += kgv; merged[r.product_id].raw_name += ' + '+r.raw; return; }
-      merged[r.product_id] = { supplier_id:sid, product_id:r.product_id, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf };
+      merged[r.product_id] = { supplier_id:sid, warehouse:wh, product_id:r.product_id, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf };
       rows.push(merged[r.product_id]);
-    } else rows.push({ supplier_id:sid, product_id:null, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf });
+    } else rows.push({ supplier_id:sid, warehouse:wh, product_id:null, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf });
   });
   const btn = document.getElementById('ssSaveBtn'); btn.disabled = true;
   try{
-    const del = await sb.from('supplier_stock').delete().eq('supplier_id', sid);
+    const del = await sb.from('supplier_stock').delete().eq('supplier_id', sid).eq('warehouse', wh);
     if(del.error) throw del.error;
     const ins = await sb.from('supplier_stock').insert(rows).select('id');
     if(ins.error) throw ins.error;
     if(!ins.data || ins.data.length < rows.length) throw new Error('не сохранено — нет прав на изменение');
-    toast('Остаток поставщика сохранён ✓ ('+rows.length+' строк)');
+    toast('Остаток сохранён ✓ — склад «'+whName(wh)+'», '+rows.length+' строк');
     ssCancelPreview(); document.getElementById('ssPaste').value='';
     ssForceOne = false; ssEdit = null;
-    await renderSupStock(true);
-  }catch(e){ err.textContent = 'Ошибка: '+(e.message||e); }
+    await loadSupStock();
+    ssFillWhControls(wh);
+    await renderSupStock(false);
+    renderForecast();
+  }catch(e){ err.textContent = /warehouse/.test(e.message||'') ? 'Нужно включить склады: выполните в Supabase скрипт migration_supplier_warehouses.sql.' : 'Ошибка: '+(e.message||e); }
   finally{ btn.disabled = false; }
 }
 
@@ -3804,11 +3878,12 @@ function ssRestoreCtl(){
     if(c.step) document.getElementById('ssStep').value = c.step;
     if(c.fill) document.getElementById('ssFill').value = c.fill; }catch(e){}
 }
-function ssOnSupplierChange(){ ssForceOne = false; ssEdit = null; renderSupPlan(); }
+function ssOnSupplierChange(){ ssForceOne = false; ssEdit = null; ssFillWhControls(); renderSupPlan(); }
 
 async function renderSupStock(reload){
   if(reload || !supStock.length) await loadSupStock();
   const sel = document.getElementById('ssSupplier'), cur = sel.value;
+  if(reload===false){} // данные уже загружены
   const cnt = {}; supStock.forEach(r=>{ cnt[r.supplier_id] = (cnt[r.supplier_id]||0) + Number(r.quantity||0); });
   const sups = [...suppliers].sort((a,b)=> (cnt[b.id]?1:0)-(cnt[a.id]?1:0) || a.name.localeCompare(b.name));
   sel.innerHTML = sups.length ? sups.map(s=>`<option value="${s.id}">${escHtml(s.name)}${cnt[s.id]?' · готово '+fmt(cnt[s.id]/1000).toLocaleString()+' т':''}</option>`).join('') : '<option value="">— сначала добавьте поставщика —</option>';
@@ -3816,6 +3891,7 @@ async function renderSupStock(reload){
   if(!document.getElementById('ssAsOf').value) document.getElementById('ssAsOf').value = todayISO();
   if(!document.getElementById('ssEta').value){ const d = new Date(); d.setDate(d.getDate()+14); document.getElementById('ssEta').value = d.toISOString().slice(0,10); }
   ssRestoreCtl();
+  ssFillWhControls();
   document.getElementById('ssError').textContent = supStockError;
   renderSupPlan();
 }
@@ -3827,7 +3903,7 @@ function ssPlanFor(sid){
   const fill = document.getElementById('ssFill').value==='fill' || ssForceOne;
   const orderMap = {}; buildOrderRows().forEach(r=>{ orderMap[r.p.id] = r; });
   const ready = {};
-  supStock.filter(r=>r.supplier_id===sid && r.product_id && Number(r.quantity)>0)
+  ssRowsSel(sid).filter(r=>r.product_id && Number(r.quantity)>0)
     .forEach(r=>{ ready[r.product_id] = (ready[r.product_id]||0) + Number(r.quantity); });
   const prioRank = {high:0, medium:1, low:2};
   const items = Object.keys(ready).map(Number).map(pid=>{
@@ -3881,11 +3957,13 @@ function renderSupPlan(){
   const host = document.getElementById('ssPlan'); if(!host) return;
   const sid = Number(document.getElementById('ssSupplier').value);
   const sup = suppliers.find(s=>s.id===sid);
-  const rowsAll = supStock.filter(r=>r.supplier_id===sid);
+  renderSupWhOverview();
+  const wh = ssSelWh();
+  const rowsAll = ssRowsSel(sid);
   const asOf = rowsAll.length ? rowsAll.map(r=>r.as_of).sort().pop() : null;
   const unmatched = rowsAll.filter(r=>!r.product_id);
   document.getElementById('ssStockInfo').textContent = rowsAll.length
-    ? `Остаток ${sup?.name||''} на ${new Date(asOf+'T00:00:00').toLocaleDateString('ru-RU')}: ${rowsAll.length} позиций, ${fmt(rowsAll.reduce((s,r)=>s+Number(r.quantity),0)).toLocaleString()} кг`
+    ? `${sup?.name||''} · ${wh==='__all'?'все склады':'склад «'+whName(wh)+'»'} на ${new Date(asOf+'T00:00:00').toLocaleDateString('ru-RU')}: ${rowsAll.length} позиций, ${fmt(rowsAll.reduce((s,r)=>s+Number(r.quantity),0)).toLocaleString()} кг`
       + (unmatched.length ? ` · не сопоставлено ${unmatched.length}` : '')
       + ((Date.now()-new Date(asOf+'T00:00:00'))/86400000 > 7 ? ' · ⚠️ данные старше недели' : '')
     : '';
@@ -3895,20 +3973,23 @@ function renderSupPlan(){
   if(!sid || !rowsAll.length){
     ssLastPlan = null;
     host.innerHTML = `<div class="empty">${supStockError ? escHtml(supStockError) : 'Для этого поставщика остаток ещё не загружен — загрузите его выше.'}</div>`;
-    tb.innerHTML = '<tr><td colspan="9" class="empty">Нет данных</td></tr>';
+    tb.innerHTML = '<tr><td colspan="10" class="empty">Нет данных</td></tr>';
     return;
   }
-  const plan = ssPlanFor(sid); ssLastPlan = { plan, sid };
-  if(ssEdit && ssEdit.sid!==sid) ssEdit = null;
+  const plan = ssPlanFor(sid); ssLastPlan = { plan, sid, wh };
+  if(ssEdit && (ssEdit.sid!==sid || ssEdit.wh!==wh)) ssEdit = null;
   const trucksNow = ssCurrentTrucks();
   const planned = {}; trucksNow.forEach(t=>t.lines.forEach(l=>{ planned[l.pid] = (planned[l.pid]||0) + (Number(l.qty)||0); }));
 
   // таблица «готово у поставщика»
   const byPid = {}; plan.items.forEach(x=>{ byPid[x.p.id] = x; });
   const stockRows = [...plan.items].sort((a,b)=>productOrderCmp(a.p,b.p));
+  const whOf = pid=>{ const m = {}; rowsAll.filter(r=>r.product_id===pid && Number(r.quantity)>0).forEach(r=>{ m[whName(r.warehouse)] = (m[whName(r.warehouse)]||0) + Number(r.quantity); });
+    return Object.entries(m).map(([w,q])=> Object.keys(m).length>1 ? `${escHtml(w)} ${fmt(q).toLocaleString()}` : escHtml(w)).join('<br>'); };
   tb.innerHTML = stockRows.map(x=>`<tr data-pcard="${x.p.id}" style="cursor:pointer">
       <td>${isImportantPriority(x.p)?(x.p.priority==='high'?'🔴 ':'🟠 '):''}${escHtml(productLabel(x.p))}</td>
       <td>${typeBadgeHtml(x.p.type)}</td>
+      <td style="font-size:12px;color:var(--text-2)">${whOf(x.p.id)}</td>
       <td class="num"><b>${fmt(x.ready).toLocaleString()}</b></td>
       <td class="num" style="color:${x.bal<=0?'var(--red)':'inherit'}">${fmt(x.bal).toLocaleString()}</td>
       <td class="num">${x.pending?fmt(x.pending).toLocaleString():'—'}</td>
@@ -3916,8 +3997,8 @@ function renderSupPlan(){
       <td class="num" data-sort="${isFinite(x.cover)?x.cover:999999}">${isFinite(x.cover)?Math.floor(x.cover):'∞'}</td>
       <td class="num" style="color:${x.need>0?'var(--red)':'var(--text-3)'}">${x.need>0?fmt(x.need).toLocaleString():'—'}</td>
       <td class="num"><b>${planned[x.p.id]?fmt(planned[x.p.id]).toLocaleString():'—'}</b></td>
-    </tr>`).join('') + unmatched.map(r=>`<tr class="ss-unmatched"><td colspan="2">${escHtml(r.raw_name)} <span class="pc-note" style="display:inline">не сопоставлено</span></td><td class="num">${fmt(r.quantity).toLocaleString()}</td><td colspan="6"></td></tr>`).join('')
-    || '<tr><td colspan="9" class="empty">Нет данных</td></tr>';
+    </tr>`).join('') + unmatched.map(r=>`<tr class="ss-unmatched"><td colspan="2">${escHtml(r.raw_name)} <span class="pc-note" style="display:inline">не сопоставлено</span></td><td style="font-size:12px">${escHtml(whName(r.warehouse))}</td><td class="num">${fmt(r.quantity).toLocaleString()}</td><td colspan="6"></td></tr>`).join('')
+    || '<tr><td colspan="10" class="empty">Нет данных</td></tr>';
 
   renderSupTrucks();
 }
@@ -3932,16 +4013,16 @@ function ssTruckLabel(p){
   return p.type+' · '+fmtTxt + (isWhiteRoll(p) ? '' : ' · '+p.name);
 }
 function ssCurrentTrucks(){
-  if(ssEdit && ssLastPlan && ssEdit.sid===ssLastPlan.sid) return ssEdit.trucks;
+  if(ssEdit && ssLastPlan && ssEdit.sid===ssLastPlan.sid && ssEdit.wh===ssLastPlan.wh) return ssEdit.trucks;
   if(!ssLastPlan) return [];
   return ssLastPlan.plan.trucks.map(t=>({ lines: t.lines.map(l=>({ pid:l.x.p.id, qty:Math.round(l.qty), kind:l.kind })) }));
 }
 function ssReadyMap(sid){
-  const m = {}; supStock.filter(r=>r.supplier_id===sid && r.product_id).forEach(r=>{ m[r.product_id] = (m[r.product_id]||0) + Number(r.quantity||0); });
+  const m = {}; ssRowsSel(sid).filter(r=>r.product_id).forEach(r=>{ m[r.product_id] = (m[r.product_id]||0) + Number(r.quantity||0); });
   return m;
 }
 function ssBeginEdit(){
-  if(!ssEdit) ssEdit = { sid: ssLastPlan.sid, trucks: JSON.parse(JSON.stringify(ssCurrentTrucks())) };
+  if(!ssEdit) ssEdit = { sid: ssLastPlan.sid, wh: ssLastPlan.wh, trucks: JSON.parse(JSON.stringify(ssCurrentTrucks())) };
   return ssEdit.trucks;
 }
 function ssAfterEdit(){ renderSupPlan(); }
@@ -4047,8 +4128,9 @@ async function ssCreateDeliveries(){
   const sup = suppliers.find(s=>s.id===sid);
   if(!confirm(`Создать ${trucks.length} машин(ы) от ${sup?.name||''} в разделе Deliveries со статусом «в пути»?`+(over>=0?`\n\n⚠️ Машина ${over+1} перегружена.`:''))) return;
   const stamp = new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
+  const whTxt = ssLastPlan.wh && ssLastPlan.wh!=='__all' && ssLastPlan.wh!=='' ? ' · '+ssLastPlan.wh : '';
   const rows = [];
-  trucks.forEach((t,i)=> t.lines.forEach(l=> rows.push({ product_id:l.pid, supplier_id:sid, quantity:Math.round(Number(l.qty)), expected_date:eta, status:'pending', plate_no:`План ${stamp} · машина ${i+1}` })));
+  trucks.forEach((t,i)=> t.lines.forEach(l=> rows.push({ product_id:l.pid, supplier_id:sid, quantity:Math.round(Number(l.qty)), expected_date:eta, status:'pending', plate_no:`План ${stamp}${whTxt} · машина ${i+1}` })));
   const { data, error } = await sb.from('deliveries').insert(rows).select('id');
   if(error){ toast('Ошибка: '+error.message, true); return; }
   if(!data || data.length<rows.length){ toast('Не все строки сохранены — нет прав', true); return; }
@@ -4056,7 +4138,7 @@ async function ssCreateDeliveries(){
   const taken = {}; rows.forEach(r=>{ taken[r.product_id] = (taken[r.product_id]||0) + r.quantity; });
   for(const pid of Object.keys(taken).map(Number)){
     let left = taken[pid];
-    for(const st of supStock.filter(x=>x.supplier_id===sid && x.product_id===pid)){
+    for(const st of ssRowsSel(sid, ssLastPlan.wh).filter(x=>x.product_id===pid)){
       if(left<=0) break;
       const q = Number(st.quantity), nq = Math.max(0, Math.round((q-left)*100)/100);
       left -= (q-nq);
@@ -4066,7 +4148,7 @@ async function ssCreateDeliveries(){
   toast(`Создано ${trucks.length} машин(ы), ${rows.length} строк в Deliveries ✓ · остаток поставщика уменьшен`);
   await Promise.all([loadDeliveries(), loadSupStock()]);
   ssForceOne = false; ssEdit = null;
-  renderSupPlan();
+  renderSupPlan(); renderForecast();
 }
 
 async function ssExportPlan(){
@@ -4075,7 +4157,8 @@ async function ssExportPlan(){
   const trucks = ssCurrentTrucks();
   const sup = suppliers.find(s=>s.id===sid);
   await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
-  const aoa = [['Заказ SoftStock' + (sup?' — '+sup.name:'')], ['Дата', new Date().toLocaleDateString('ru-RU')], [],
+  const whT = ssLastPlan.wh && ssLastPlan.wh!=='__all' ? whName(ssLastPlan.wh) : 'все склады';
+  const aoa = [['Заказ SoftStock' + (sup?' — '+sup.name:'')], ['Склад', whT], ['Дата', new Date().toLocaleDateString('ru-RU')], [],
     ['Машина','Вид основы','Ширина, см','Слои','GSM','Цвет / название','Количество, кг']];
   trucks.forEach((t,i)=>{
     let tot = 0;
