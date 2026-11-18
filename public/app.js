@@ -884,7 +884,7 @@ function renderDashDetail(){
   const tbody = document.querySelector('#dashDetailTable tbody');
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет данных</td></tr>'; return; }
   tbody.innerHTML = rows.map(({p,v,prev,delta,daily})=>`<tr>
-    <td>${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></td>
+    <td><span class="pname">${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></span></td>
     <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
     <td class="num">${fmt(v).toLocaleString()}</td>
     <td class="num" style="color:var(--text-3)">${fmt(prev).toLocaleString()}</td>
@@ -922,7 +922,7 @@ function renderDashRecent(){
     const p = products.find(x=>x.id===r.product_id);
     if(!p) return '';
     return `<tr data-pcard="${p.id}" title="Открыть карточку товара">
-      <td>${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></td>
+      <td><span class="pname">${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></span></td>
       <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
       <td class="num">${fmt(p.balance).toLocaleString()}</td>
       <td class="num">${fmt(avgByProd[p.id]||0).toLocaleString()}</td>
@@ -1193,7 +1193,7 @@ function renderLevels(){
       ? `${fmt(daily).toLocaleString()} <a href="#" onclick="event.preventDefault();editManualRate(${p.id})" title="Изменить ручную норму">✏️</a>`
       : (canEdit() ? `${daily>0?fmt(daily).toLocaleString():'—'} <a href="#" onclick="event.preventDefault();editManualRate(${p.id})" title="Задать ручную норму" style="opacity:.5">✏️</a>` : (daily>0?fmt(daily).toLocaleString():'—'));
     return `<tr data-pcard="${p.id}" title="Открыть карточку товара">
-      <td>${dot}${p.name}${badge}</td>
+      <td>${dot}<span class="pname">${p.name}</span>${badge}</td>
       <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
       <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
       <td class="num" style="font-weight:600">${fmt(balance).toLocaleString()}</td>
@@ -1635,7 +1635,7 @@ function orderRowHtml(r){
   const sup = orderSupMap[p.id] || '';
   const dot = p.priority==='high'?'🔴 ':p.priority==='medium'?'🟠 ':p.priority==='low'?'⚪ ':'';
   return `<tr data-pid="${p.id}">
-    <td data-pcard="${p.id}" title="Открыть карточку товара" style="text-decoration:underline dotted;text-underline-offset:3px">${dot}${p.name}</td>
+    <td data-pcard="${p.id}" title="Открыть карточку товара" style="text-decoration:underline dotted;text-underline-offset:3px">${dot}<span class="pname">${p.name}</span></td>
     <td>${typeBadgeHtml(p.type)}</td>
     <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
     <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}${p.balance==0?' <span class="badge badge-critical" style="margin-left:2px">ZERO</span>':''}</td>
