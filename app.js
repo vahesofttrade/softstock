@@ -125,7 +125,7 @@ function toggleSidebar(force){
 // DATA LOADING
 // ---------------------------------------------------------------
 async function refreshAll(){
-  await Promise.all([loadProducts(), loadSuppliers(), loadDeliveries(), loadStockLog(), loadReservations(), loadProfileNames()]);
+  await Promise.all([loadProducts(), loadSuppliers(), loadDeliveries(), loadStockLog(), loadReservations(), loadProfileNames(), loadSupStock()]);
   fillProductSelects();
   fillSupplierSelect();
   renderDashboard();
@@ -884,7 +884,7 @@ function renderDashDetail(){
   const tbody = document.querySelector('#dashDetailTable tbody');
   if(!rows.length){ tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет данных</td></tr>'; return; }
   tbody.innerHTML = rows.map(({p,v,prev,delta,daily})=>`<tr>
-    <td>${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></td>
+    <td><span class="pname">${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></span></td>
     <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
     <td class="num">${fmt(v).toLocaleString()}</td>
     <td class="num" style="color:var(--text-3)">${fmt(prev).toLocaleString()}</td>
@@ -922,7 +922,7 @@ function renderDashRecent(){
     const p = products.find(x=>x.id===r.product_id);
     if(!p) return '';
     return `<tr data-pcard="${p.id}" title="Открыть карточку товара">
-      <td>${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></td>
+      <td><span class="pname">${p.name} <span style="color:var(--text-3)">${p.width_cm||'—'}·${p.ply}пл·${p.gsm||'—'}</span></span></td>
       <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
       <td class="num">${fmt(p.balance).toLocaleString()}</td>
       <td class="num">${fmt(avgByProd[p.id]||0).toLocaleString()}</td>
@@ -1177,7 +1177,7 @@ function renderLevels(){
   // ---- table ----
   const rows = lvlFilteredSortedRows();
   const tbody = document.querySelector('#levelsTable tbody');
-  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="11" class="empty">Нет товаров</td></tr>'; return; }
+  if(!rows.length){ tbody.innerHTML = '<tr><td colspan="12" class="empty">Нет товаров</td></tr>'; return; }
   tbody.innerHTML = rows.map(({p,balance,daily,usedManual,u30,days,pending})=>{
     const badge = balance===0 ? '<span class="badge badge-critical" style="margin-left:6px">ZERO</span>'
                 : balance<1000 ? '<span class="badge badge-soon" style="margin-left:6px">LOW</span>' : '';
@@ -1193,11 +1193,12 @@ function renderLevels(){
       ? `${fmt(daily).toLocaleString()} <a href="#" onclick="event.preventDefault();editManualRate(${p.id})" title="Изменить ручную норму">✏️</a>`
       : (canEdit() ? `${daily>0?fmt(daily).toLocaleString():'—'} <a href="#" onclick="event.preventDefault();editManualRate(${p.id})" title="Задать ручную норму" style="opacity:.5">✏️</a>` : (daily>0?fmt(daily).toLocaleString():'—'));
     return `<tr data-pcard="${p.id}" title="Открыть карточку товара">
-      <td>${dot}${p.name}${badge}</td>
+      <td>${dot}<span class="pname">${p.name}</span>${badge}</td>
       <td><span style="color:${TYPE_COLOR[p.type]};font-weight:600">${p.type}</span></td>
       <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
       <td class="num" style="font-weight:600">${fmt(balance).toLocaleString()}</td>
       <td>${pendingCell}</td>
+      <td class="num" data-sort="${supStockFor(p.id).total}">${supStockCellHtml(p.id)}</td>
       <td class="num" style="color:var(--text-2)">${u30>0?fmt(u30).toLocaleString():'—'}</td>
       <td class="num">${dailyCell}</td>
       <td class="num" style="font-weight:600;color:${daysColor}">${daysText}</td>
@@ -1417,6 +1418,16 @@ function renderForecast(){
           </div>
           ${daysWithDelivery!==null?`<div style="margin-top:6px;padding-top:6px;border-top:1px solid #93c5fd;font-size:11px;color:#1d4ed8">⏱ С учётом поставки: <strong>${daysWithDelivery} дн.</strong></div>`:''}
         </div>` : '';
+      const supRows = (typeof supStock!=='undefined' ? supStock : []).filter(x=>x.product_id===p.id && Number(x.quantity)>0);
+      const supAgg = {}; supRows.forEach(x=>{ const sn = (suppliers.find(z=>z.id===x.supplier_id)?.name||'?') + (x.warehouse ? ' · '+x.warehouse : '');
+        (supAgg[sn] = supAgg[sn] || { kg:0, asOf:'', sid:x.supplier_id, wh:x.warehouse||'' }); supAgg[sn].kg += Number(x.quantity); if((x.as_of||'')>supAgg[sn].asOf) supAgg[sn].asOf = x.as_of; });
+      const supTotal = Object.values(supAgg).reduce((a,v)=>a+v.kg,0);
+      const supplierSection = supTotal>0 ? `<div class="fc-sup">
+          <div class="fc-sup-h">🏭 Готово у поставщика: ${fmt(supTotal).toLocaleString()} кг</div>
+          ${Object.entries(supAgg).sort((a,b)=>b[1].kg-a[1].kg).map(([n,v])=>{ const inPlan = fcPlannedQty(p.id, v.sid, v.wh);
+            return `<div class="fc-sup-r"><span>${escHtml(n)}${v.asOf?` <span style="color:var(--text-3)">· ${v.asOf.slice(8,10)}.${v.asOf.slice(5,7)}</span>`:''}${inPlan?`<br><span class="fc-inplan">🚛 в плане ${fmt(inPlan).toLocaleString()} кг</span>`:''}</span>
+              <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><b>${fmt(v.kg).toLocaleString()} кг</b>${canEdit()?`<button class="fc-add" title="Добавить в машину" onclick="event.stopPropagation();fcAddToTruck(${p.id},${v.sid},${escHtml(JSON.stringify(v.wh))})">＋ в машину</button>`:''}</span></div>`; }).join('')}
+        </div>` : '';
       return `<div class="fc-card" data-pcard="${p.id}" title="Открыть карточку товара" style="background:${s.bg};border-color:${s.border}">
         <div style="display:flex;align-items:center;justify-content:space-between">
           <div style="display:flex;align-items:center;gap:8px;min-width:0">
@@ -1442,6 +1453,7 @@ function renderForecast(){
         </div>
         <div style="font-size:11px;color:var(--text-2);padding:4px 0;border-top:1px solid ${s.border}">${r.urgency==='out'?'⛔ <strong>Закончился</strong> — '+(r.rate>0?'расход '+fmt(r.rate).toLocaleString()+' кг/день, ':'расхода нет, но приоритет '+(r.p.priority==='high'?'High':'Medium')+' — ')+'нужен заказ':'⏱ '+(r.daysLeft==null?'<strong>норма не задана</strong>':'<strong>'+r.daysLeft+' дн.</strong> осталось')}</div>
         ${deliverySection}
+        ${supplierSection}
       </div>`;
     }).join('');
     return `<div style="margin-bottom:24px">
@@ -1635,12 +1647,13 @@ function orderRowHtml(r){
   const sup = orderSupMap[p.id] || '';
   const dot = p.priority==='high'?'🔴 ':p.priority==='medium'?'🟠 ':p.priority==='low'?'⚪ ':'';
   return `<tr data-pid="${p.id}">
-    <td data-pcard="${p.id}" title="Открыть карточку товара" style="text-decoration:underline dotted;text-underline-offset:3px">${dot}${p.name}</td>
+    <td data-pcard="${p.id}" title="Открыть карточку товара" style="text-decoration:underline dotted;text-underline-offset:3px">${dot}<span class="pname">${p.name}</span></td>
     <td>${typeBadgeHtml(p.type)}</td>
     <td>${p.width_cm??'—'}</td><td>${p.ply}</td><td>${p.gsm??'—'}</td>
     <td class="num" style="color:${balColor};font-weight:600">${fmt(p.balance).toLocaleString()}${p.balance==0?' <span class="badge badge-critical" style="margin-left:2px">ZERO</span>':''}</td>
     <td class="num" style="font-weight:600;color:${daysColor}">${r.daysLeft==null?'<span style="color:var(--text-3);font-weight:400">∞</span>':r.daysLeft+'d'}${urgent?' 🚨':''}</td>
     <td class="num" style="color:var(--brand)">${r.pending>0?'+'+fmt(r.pending).toLocaleString():'—'}</td>
+    <td class="num" data-sort="${supStockFor(p.id).total}">${supStockCellHtml(p.id)}</td>
     <td class="num" style="color:var(--text-2)">${r.monthly>0?fmt(r.monthly).toLocaleString()+' kg'+(r.usedManual?' <span style="font-size:10px;font-weight:600;color:var(--brand)">ручн.</span>':(orderRateMode==='manual'?' <span style="font-size:10px;color:var(--text-3)" title="Ручной нормы нет — взято взвешенное среднее">взв.</span>':'')):'—'}</td>
     <td class="num">${r.targetQty>0?fmt(r.targetQty).toLocaleString()+' kg<div style="font-size:9px;color:var(--text-3)">'+r.targetMonths+'mo</div>':'—'}</td>
     <td class="num" style="font-weight:600;color:${r.suggested>0?'var(--red)':'var(--green)'}">${r.suggested>0?fmt(r.suggested).toLocaleString()+' kg':'✓'}</td>
@@ -1661,6 +1674,7 @@ function renderOrderTable(rows){
     <th>Current</th>
     <th>Days left</th>
     <th>Incoming</th>
+    <th style="color:#6d28d9">У поставщика</th>
     <th>Monthly need</th>
     <th>Target</th>
     <th>Suggested</th>
@@ -2201,13 +2215,13 @@ async function cancelRes(id){
 // ---------------------------------------------------------------
 // SCANNER (shared helpers + full page + Reservations mini-scanner)
 // ---------------------------------------------------------------
-async function callScannerApi(base64, mimeType){
+async function callScannerApi(base64, mimeType, kind){
   let res;
   try{
     res = await fetch('/.netlify/functions/scan-invoice', {
       method: 'POST',
       headers: {'content-type':'application/json'},
-      body: JSON.stringify({ imageBase64: base64, mimeType })
+      body: JSON.stringify({ imageBase64: base64, mimeType, kind })
     });
   }catch(networkErr){
     return { success:false, error: 'Сеть/сервер недоступен: '+networkErr.message };
@@ -2219,6 +2233,8 @@ async function callScannerApi(base64, mimeType){
   try{
     return JSON.parse(text);
   }catch(parseErr){
+    if(res.status===504 || /Inactivity Timeout|timed out/i.test(text))
+      return { success:false, error: 'Сканер не успел за отведённое время (лимит Netlify ~26 сек) — список слишком длинный. Загрузите Excel или PDF-файл из 1С (они читаются без сканера) или сфотографируйте список частями.' };
     return { success:false, error: 'Сервер вернул не-JSON (HTTP '+res.status+'): '+text.slice(0,200) };
   }
 }
@@ -2926,8 +2942,20 @@ function pcAggregate(gran){
   });
 }
 
+function renderPcSupStock(p){
+  const host = document.getElementById('pcSupStock'); if(!host) return;
+  const st = supStockFor(p.id);
+  if(!(st.total>0)){ host.innerHTML = ''; return; }
+  host.innerHTML = `<div class="fc-sup" style="margin:0 0 12px">
+    <div class="fc-sup-h">🏭 Готово у поставщика: ${fmt(st.total).toLocaleString()} кг</div>
+    ${st.parts.map(x=>{ const inPlan = fcPlannedQty(p.id, x.sid, x.wh);
+      return `<div class="fc-sup-r" style="font-size:12px"><span>${escHtml(x.name)}${x.asOf?` <span style="color:var(--text-3)">· на ${x.asOf.slice(8,10)}.${x.asOf.slice(5,7)}</span>`:''}${inPlan?` <span class="fc-inplan">· 🚛 в плане ${fmt(inPlan).toLocaleString()} кг</span>`:''}</span>
+        <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><b>${fmt(x.kg).toLocaleString()} кг</b>${canEdit()?`<button class="fc-add" onclick="fcAddToTruck(${p.id},${x.sid},${escHtml(JSON.stringify(x.wh))})">＋ в машину</button>`:''}</span></div>`; }).join('')}
+  </div>`;
+}
 function renderPcAnalytics(){
   const p = products.find(x=>x.id===pcState.pid); if(!p) return;
+  renderPcSupStock(p);
   document.querySelectorAll('#pcGranBar .pill').forEach(el=>el.classList.toggle('active', el.dataset.gran===pcState.gran));
   const ev = pcEvents();
   const yearStart = new Date().getFullYear()+'-01-01';
@@ -3463,6 +3491,85 @@ async function loadSupStock(){
   supStockError = error ? (/supplier_stock/.test(error.message) ? 'Таблица ещё не создана — выполните в Supabase скрипт migration_supplier_stock.sql.' : error.message) : '';
   supStock = data || [];
 }
+// ── остаток у поставщиков по товару (для Stock Levels, Orders, карточки, Forecast) ──
+function supStockFor(pid){
+  const m = {};
+  (typeof supStock!=='undefined' ? supStock : []).filter(r=>r.product_id===pid && Number(r.quantity)>0).forEach(r=>{
+    const k = r.supplier_id+'|'+(r.warehouse||'');
+    (m[k] = m[k] || { sid:r.supplier_id, wh:r.warehouse||'', kg:0, asOf:'' });
+    m[k].kg += Number(r.quantity); if((r.as_of||'')>m[k].asOf) m[k].asOf = r.as_of;
+  });
+  const parts = Object.values(m).map(x=>({ ...x, name:(suppliers.find(s=>s.id===x.sid)?.name||'?') + (x.wh ? ' · '+x.wh : '') })).sort((a,b)=>b.kg-a.kg);
+  return { total: parts.reduce((a,x)=>a+x.kg,0), parts };
+}
+function supStockCellHtml(pid){
+  const st = supStockFor(pid);
+  if(!(st.total>0)) return '<span style="color:var(--text-3)">—</span>';
+  const tip = st.parts.map(x=>x.name+': '+fmt(x.kg).toLocaleString()+' кг'+(x.asOf?' (на '+x.asOf.slice(8,10)+'.'+x.asOf.slice(5,7)+')':'')).join('\n');
+  return `<span class="sup-cell" title="${escHtml(tip)}"><b>${fmt(st.total).toLocaleString()}</b>${st.parts.length>1?`<span class="sup-cell-n">${st.parts.length} скл.</span>`:`<span class="sup-cell-n">${escHtml(st.parts[0].name)}</span>`}</span>`;
+}
+
+// ── склады поставщиков ──
+const whName = w=> (w && String(w).trim()) ? String(w).trim() : 'Основной';
+function ssSelWh(){ const el = document.getElementById('ssWh'); return el ? el.value : '__all'; }
+// строки остатка выбранного поставщика и склада (или всех его складов)
+function ssRowsSel(sid, wh){
+  wh = wh===undefined ? ssSelWh() : wh;
+  return supStock.filter(r=> r.supplier_id===sid && (wh==='__all' || (r.warehouse||'')===wh));
+}
+function ssWarehousesOf(sid){
+  return [...new Set(supStock.filter(r=>r.supplier_id===sid).map(r=>r.warehouse||''))].sort((a,b)=> (a===''?-1:b===''?1:a.localeCompare(b)));
+}
+function ssSelectWh(sid, wh){
+  document.getElementById('ssSupplier').value = String(sid);
+  ssForceOne = false;
+  ssFillWhControls(wh);
+  renderSupPlan();
+  document.getElementById('ssPlan').scrollIntoView({behavior:'smooth', block:'start'});
+}
+function ssFillWhControls(prefer){
+  const sid = Number(document.getElementById('ssSupplier').value);
+  const whs = ssWarehousesOf(sid);
+  const sel = document.getElementById('ssWh'), cur = prefer!==undefined ? prefer : sel.value;
+  sel.innerHTML = (whs.length>1 ? '<option value="__all">Все склады вместе</option>' : '')
+    + whs.map(w=>`<option value="${escHtml(w)}">${escHtml(whName(w))}</option>`).join('')
+    || '<option value="__all">—</option>';
+  if([...sel.options].some(o=>o.value===cur)) sel.value = cur;
+  else if(whs.length) sel.value = whs.length>1 ? whs[0] : whs[0];
+  document.getElementById('ssWhList').innerHTML = whs.filter(w=>w).map(w=>`<option value="${escHtml(w)}">`).join('');
+}
+function renderSupWhOverview(){
+  const host = document.getElementById('ssWhOverview'); if(!host) return;
+  const g = {};
+  supStock.forEach(r=>{ const k = r.supplier_id+'|'+(r.warehouse||''); (g[k] = g[k] || { sid:r.supplier_id, wh:r.warehouse||'', kg:0, n:0, unm:0, asOf:'' });
+    g[k].kg += Number(r.quantity||0); g[k].n++; if(!r.product_id) g[k].unm++; if((r.as_of||'') > g[k].asOf) g[k].asOf = r.as_of; });
+  const list = Object.values(g).filter(x=>x.kg>0 || x.n).sort((a,b)=>{ const sa = suppliers.find(s=>s.id===a.sid)?.name||'', sb = suppliers.find(s=>s.id===b.sid)?.name||''; return sa.localeCompare(sb) || (a.wh===''?-1:b.wh===''?1:a.wh.localeCompare(b.wh)); });
+  if(!list.length){ host.innerHTML = `<div class="empty">${supStockError ? escHtml(supStockError) : 'Пока ничего не загружено. Выберите поставщика и склад ниже и загрузите его остаток.'}</div>`; return; }
+  const sid = Number(document.getElementById('ssSupplier').value), wh = ssSelWh();
+  host.innerHTML = list.map(x=>{
+    const sup = suppliers.find(s=>s.id===x.sid);
+    const old = x.asOf && (Date.now()-new Date(x.asOf+'T00:00:00'))/86400000 > 7;
+    const active = x.sid===sid && (wh==='__all' || wh===x.wh);
+    return `<div class="ss-wh${active?' active':''}" onclick="ssSelectWh(${x.sid}, ${escHtml(JSON.stringify(x.wh))})" title="Показать машины с этого склада">
+      ${canEdit()?`<button class="ss-x" title="Очистить остаток этого склада" onclick="event.stopPropagation();ssClearWh(${x.sid}, ${escHtml(JSON.stringify(x.wh))})">🗑</button>`:''}
+      <div class="ss-wh-sup">${escHtml(sup?.name||'?')}</div>
+      <div class="ss-wh-name">🏭 ${escHtml(whName(x.wh))}</div>
+      <div class="ss-wh-meta"><b style="color:var(--text)">${fmt(x.kg).toLocaleString()} кг</b> · ${x.n} поз.${x.unm?` · <span style="color:var(--amber)">не сопост. ${x.unm}</span>`:''}</div>
+      <div class="ss-wh-meta" style="${old?'color:var(--amber)':''}">на ${x.asOf ? new Date(x.asOf+'T00:00:00').toLocaleDateString('ru-RU') : '—'}${old?' · ⚠️ старше недели':''}</div>
+    </div>`;
+  }).join('');
+}
+async function ssClearWh(sid, wh){
+  const sup = suppliers.find(s=>s.id===sid);
+  if(!confirm(`Удалить остаток склада «${whName(wh)}» поставщика ${sup?.name||''}?`)) return;
+  const { data, error } = await sb.from('supplier_stock').delete().eq('supplier_id', sid).eq('warehouse', wh).select('id');
+  if(error){ toast('Ошибка: '+error.message, true); return; }
+  if(!data || !data.length){ toast('Не удалено — нет прав', true); return; }
+  toast('Остаток склада удалён ✓');
+  ssDropEdit(sid, wh); await renderSupStock(true);
+  renderForecast();
+}
+
 function ssNum(v){
   if(typeof v==='number') return v;
   const s = String(v==null?'':v).replace(/ /g,' ').trim();
@@ -3475,7 +3582,7 @@ function ssNum(v){
   return parseFloat(t);
 }
 // ячейка — число (а не текст, в котором есть цифры)
-function ssIsNum(c){ return typeof c==='number' || /^[\s\u00a0]*-?[\d\s\u00a0]+([.,]\d+)?[\s\u00a0]*$/.test(String(c)) && /\d/.test(String(c)); }
+function ssIsNum(c){ return typeof c==='number' || /^[\s\u00a0]*-?[\d\s\u00a0]+([.,]\d+)?[\s\u00a0]*(кг|kg|тн|т|t)?\.?[\s\u00a0]*$/i.test(String(c)) && /\d/.test(String(c)); }
 const ssKnownWidths = ()=> new Set(products.map(p=>Number(p.width_cm)).filter(x=>x>0));
 function ssResolveWidth(w, unit){
   if(!(w>0)) return null;
@@ -3511,12 +3618,12 @@ const SS_HDR = {
   gsm:   /gsm|плотн|г\/м|grammage|density|գրամ/i,
   qty:   /кол|qty|quant|вес|weight|net|нетто|кг|\bkg\b|тонн|\bton|остат|stock|налич|ready|готов|запас|сумма|итого по|մնացորդ|քաշ|քանակ/i
 };
-function ssRowsFromTable(aoa){
+function ssRowsFromTable(aoa, opts={}){
   aoa = (aoa||[]).map(r=>(r||[]).map(c=>c==null?'':c)).filter(r=>r.some(c=>String(c).trim()!==''));
   if(!aoa.length) return { rows:[], unit:'kg' };
   // ищем строку заголовков в первых 15 строках
   let hdrIdx = -1, cols = {};
-  for(let i=0;i<Math.min(15,aoa.length);i++){
+  for(let i=0;i<(opts.noHeader?0:Math.min(15,aoa.length));i++){
     const c = {};
     aoa[i].forEach((v,j)=>{ const s = String(v); if(!s || typeof v==='number') return;
       for(const k of ['qty','gsm','ply','width','name']) if(c[k]==null && SS_HDR[k].test(s)){ c[k]=j; break; } });
@@ -3546,6 +3653,7 @@ function ssRowsFromTable(aoa){
     else { const nums = r.filter(ssIsNum).map(ssNum).filter(x=>!isNaN(x)); qty = nums.length ? nums[nums.length-1] : NaN; }
     if(!(qty>0)) return;
     if(/итог|всего|total|ընդամենը/i.test(r.map(String).join(' '))) return;
+    if(hdrIdx<0 && f.width==null && f.ply==null && f.gsm==null) return;   // без заголовков берём только строки с форматом
     if(!raw.trim()) raw = [f.width&&f.width+'cm', f.ply&&f.ply+'ply', f.gsm&&f.gsm+'gsm'].filter(Boolean).join(' ');
     rows.push({ raw: raw.trim(), width:f.width, ply:f.ply, gsm:f.gsm, qtyRaw: qty });
   });
@@ -3607,6 +3715,77 @@ function ssLoadRows(parsed, source){
   document.getElementById('ssPreview').classList.remove('hidden');
   ssRenderPreview();
 }
+// PDF → строки таблицы: текстовые фрагменты группируются по строкам (координата Y),
+// большой промежуток по X = новая колонка
+async function ssPdfToTable(file){
+  if(!window.pdfjsLib){
+    await loadScriptOnce('https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.min.js');
+    window.pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+  }
+  const pdf = await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const out = [];
+  for(let pn=1; pn<=pdf.numPages; pn++){
+    const page = await pdf.getPage(pn);
+    const tc = await page.getTextContent();
+    const items = tc.items.filter(i=>i.str && i.str.trim()).map(i=>({ s:i.str, x:i.transform[4], y:i.transform[5], w:i.width||0, h:Math.abs(i.transform[3])||8 }));
+    items.sort((a,b)=> b.y-a.y || a.x-b.x);
+    const lines = [];
+    items.forEach(it=>{
+      const ln = lines.find(l=> Math.abs(l.y-it.y) <= Math.max(2, it.h*0.45));
+      if(ln) ln.items.push(it); else lines.push({ y:it.y, items:[it] });
+    });
+    lines.sort((a,b)=>b.y-a.y).forEach(l=>{
+      l.items.sort((a,b)=>a.x-b.x);
+      const cells = []; let cur = null, lastEnd = -1e9;
+      l.items.forEach(it=>{
+        const gap = it.x - lastEnd;
+        if(cur===null || gap > Math.max(10, it.h*1.2)){ cur = it.s; cells.push(cur); }
+        else cells[cells.length-1] = cells[cells.length-1] + (gap>1?' ':'') + it.s;
+        lastEnd = it.x + it.w;
+      });
+      out.push(cells.map(c=>c.trim()));
+    });
+  }
+  return ssMergeWrappedLines(out);
+}
+// Длинные названия в PDF переносятся на 2–3 строки, и количество стоит только на одной из них.
+// Склеиваем такие строки в одну запись: в счёте из 1С запись начинается с номера строки (1, 2, 3…),
+// иначе — со строки, где есть количество.
+function ssMergeWrappedLines(lines){
+  const isRowNo = c=> /^\d{1,3}\.?$/.test(String(c||'').trim());
+  const numCells = l=> l.filter((c,i)=> ssIsNum(c) && !(i===0 && isRowNo(c)));
+  // «10 Ц1-И-НС» — номер строки слипся с артикулом: отделяем (используется, только если счёт нумерованный)
+  const split = lines.map(l=>{ const m = String(l[0]||'').match(/^(\d{1,3})\.?\s+(\S.*)$/); return m && !ssIsNum(l[0]) ? [m[1], m[2], ...l.slice(1)] : l; });
+  const isNumbered = ls=>{ const q = ls.filter(l=>numCells(l).length); return q.length && q.filter(l=>isRowNo(l[0])).length >= q.length*0.6; };
+  const numbered = isNumbered(split);
+  if(numbered) lines = split;
+  const recs = []; let cur = null;
+  lines.forEach(l=>{
+    if(!numbered && l.length===1 && ssIsNum(l[0])) return;          // заголовок группы сводной таблицы («1200»)
+    if(/итог|всего|total|страница|page\s*\d|подпис|отпустил|получил/i.test(l.join(' '))){ cur = null; return; }   // подвал документа
+    const hasQty = numCells(l).length>0;
+    // нумерованный счёт: новая запись с номера строки; иначе — со строки с количеством,
+    // а строки без количества дописываются к предыдущей записи (перенос названия)
+    const starts = numbered ? (isRowNo(l[0]) && l.length>1) : (hasQty || !cur || cur.qty==null);
+    if(!cur && numbered && !starts) return;                          // текст вне записей (шапка/подвал)
+    if(starts || !cur){ cur = { text:[], qty:null }; recs.push(cur); }
+    l.forEach((c,i)=>{
+      if(numbered && starts && i===0) return;                       // номер строки
+      if(ssIsNum(c) && (numbered ? starts : hasQty)) cur.qty = c;   // количество — только со строки записи
+      else if(!/^(кг|kg|т|t|шт)\.?$/i.test(String(c).trim())) cur.text.push(c);
+    });
+  });
+  return recs.map(r=> r.qty!=null ? [r.text.join(' '), r.qty] : [r.text.join(' ')]);
+}
+const _scriptLoads = {};
+function loadScriptOnce(src){
+  if(!_scriptLoads[src]) _scriptLoads[src] = new Promise((ok, fail)=>{
+    const s = document.createElement('script'); s.src = src; s.onload = ok;
+    s.onerror = ()=>{ delete _scriptLoads[src]; fail(new Error('не удалось загрузить '+src)); };
+    document.head.appendChild(s);
+  });
+  return _scriptLoads[src];
+}
 function ssTogglePaste(){ document.getElementById('ssPasteBox').classList.toggle('hidden'); }
 function ssParsePaste(){
   const text = document.getElementById('ssPaste').value;
@@ -3619,19 +3798,34 @@ async function ssHandleFile(file){
   err.textContent = ''; st.textContent = 'Читаю файл…';
   try{
     const name = file.name.toLowerCase();
-    if(file.type.startsWith('image/') || file.type==='application/pdf' || name.endsWith('.pdf')){
-      st.textContent = 'Распознаю сканером… (10–40 сек)';
+    const isPdf = file.type==='application/pdf' || name.endsWith('.pdf');
+    if(isPdf){
+      // PDF из 1С/Excel содержит текст — читаем его прямо в браузере, без сканера
+      st.textContent = 'Читаю PDF…';
+      const aoa = await ssPdfToTable(file).catch(()=>null);
+      // в PDF колонки заголовка и строк часто не совпадают — разбираем по строкам, без заголовков
+      const parsed = aoa ? ssRowsFromTable(aoa, { noHeader:true }) : { rows:[] };
+      if(parsed.rows.length){ ssLoadRows(parsed, file.name+' (текст PDF)'); return; }
+      // в PDF нет текста (скан) — отправляем сканеру
+    }
+    if(file.type.startsWith('image/') || isPdf){
+      st.textContent = 'Распознаю сканером… (обычно 5–20 сек)';
       let base64, mime;
-      if(file.type.startsWith('image/')){ const r = await resizeImageForScan(file, 2000, 0.85); base64 = r.base64; mime = r.mimeType; }
+      if(file.type.startsWith('image/')){ const r = await resizeImageForScan(file, 1800, 0.82); base64 = r.base64; mime = r.mimeType; }
       else { base64 = await new Promise((ok,no)=>{ const fr = new FileReader(); fr.onload = ()=>ok(String(fr.result).split(',')[1]); fr.onerror = ()=>no(new Error('не удалось прочитать PDF')); fr.readAsDataURL(file); }); mime = 'application/pdf'; }
-      const res = await callScannerApi(base64, mime);
+      const res = await callScannerApi(base64, mime, 'stock');
       if(!res.success) throw new Error(res.error||'сканер не ответил');
       const rows = (res.items||[]).map(it=>{
+        if(Array.isArray(it)){   // быстрый режим: [name, width_mm, ply, gsm, kg]
+          const [nm, wmm, ply, gsm, kg] = it;
+          const f = ssParseFormat(nm||'');
+          return { raw: String(nm||''), width: f.width ?? ssResolveWidth(ssNum(wmm), 'mm'), ply: f.ply ?? (ssNum(ply)||null), gsm: f.gsm ?? (ssNum(gsm)||null), qtyRaw: ssNum(kg) };
+        }
         const f = ssParseFormat((it.name_original||'')+' '+(it.name_en||''));
-        const w = f.width ?? ssResolveWidth(ssNum(it.width_mm), 'mm');
-        return { raw: it.name_original || it.name_en || '', width:w, ply: f.ply ?? (ssNum(it.layers)||null), gsm: f.gsm ?? (ssNum(it.gsm)||null), qtyRaw: ssNum(it.net_weight_t) };
+        return { raw: it.name_original || it.name_en || '', width: f.width ?? ssResolveWidth(ssNum(it.width_mm), 'mm'), ply: f.ply ?? (ssNum(it.layers)||null), gsm: f.gsm ?? (ssNum(it.gsm)||null), qtyRaw: ssNum(it.net_weight_t)*1000 };
       }).filter(r=>r.qtyRaw>0);
-      ssLoadRows({ rows, unit:'t' }, 'сканер');
+      rows.forEach(r=>{ r.typeHint = ssTypeHint(r.raw); });
+      ssLoadRows({ rows, unit:'kg' }, 'сканер');
       return;
     }
     if(name.endsWith('.csv') || name.endsWith('.txt')){
@@ -3679,34 +3873,38 @@ async function ssSave(){
   if(!ssPreviewRows || !ssPreviewRows.length){ err.textContent = 'Нечего сохранять.'; return; }
   const mult = document.getElementById('ssUnit').value==='t' ? 1000 : 1;
   const asOf = document.getElementById('ssAsOf').value || todayISO();
+  const wh = (document.getElementById('ssWhInput').value||'').trim().replace(/^основной$/i,'');
   const merged = {}, rows = [];
   ssPreviewRows.forEach(r=>{
     const kgv = Math.round(r.qtyRaw*mult*100)/100; if(!(kgv>0)) return;
     if(r.product_id){
       if(merged[r.product_id]){ merged[r.product_id].quantity += kgv; merged[r.product_id].raw_name += ' + '+r.raw; return; }
-      merged[r.product_id] = { supplier_id:sid, product_id:r.product_id, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf };
+      merged[r.product_id] = { supplier_id:sid, warehouse:wh, product_id:r.product_id, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf };
       rows.push(merged[r.product_id]);
-    } else rows.push({ supplier_id:sid, product_id:null, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf });
+    } else rows.push({ supplier_id:sid, warehouse:wh, product_id:null, raw_name:r.raw||'', width_cm:r.width, ply:r.ply, gsm:r.gsm, quantity:kgv, as_of:asOf });
   });
   const btn = document.getElementById('ssSaveBtn'); btn.disabled = true;
   try{
-    const del = await sb.from('supplier_stock').delete().eq('supplier_id', sid);
+    const del = await sb.from('supplier_stock').delete().eq('supplier_id', sid).eq('warehouse', wh);
     if(del.error) throw del.error;
     const ins = await sb.from('supplier_stock').insert(rows).select('id');
     if(ins.error) throw ins.error;
     if(!ins.data || ins.data.length < rows.length) throw new Error('не сохранено — нет прав на изменение');
-    toast('Остаток поставщика сохранён ✓ ('+rows.length+' строк)');
+    toast('Остаток сохранён ✓ — склад «'+whName(wh)+'», '+rows.length+' строк');
     ssCancelPreview(); document.getElementById('ssPaste').value='';
-    ssForceOne = false; ssEdit = null;
-    await renderSupStock(true);
-  }catch(e){ err.textContent = 'Ошибка: '+(e.message||e); }
+    ssForceOne = false; ssDropEdit(sid, wh);
+    await loadSupStock();
+    ssFillWhControls(wh);
+    await renderSupStock(false);
+    renderForecast(); renderLevels(); renderOrders();
+  }catch(e){ err.textContent = /warehouse/.test(e.message||'') ? 'Нужно включить склады: выполните в Supabase скрипт migration_supplier_warehouses.sql.' : 'Ошибка: '+(e.message||e); }
   finally{ btn.disabled = false; }
 }
 
 // настройки расчёта запоминаются в браузере
 function ssSaveCtl(){
-  if(ssEdit && !confirm('Пересчитать машины заново? Ручные правки плана будут сброшены.')){ ssRestoreCtl(); return; }
-  ssEdit = null;
+  if(Object.keys(ssEditStore).length && !confirm('Пересчитать машины заново? Ручные правки планов (и добавленное из Forecast) будут сброшены.')){ ssRestoreCtl(); return; }
+  ssEdit = null; ssEditStore = {}; try{ localStorage.setItem('ss_plan_edits','{}'); }catch(e){}
   try{ localStorage.setItem('ss_plan_ctl', JSON.stringify({ cap:document.getElementById('ssCap').value, step:document.getElementById('ssStep').value, fill:document.getElementById('ssFill').value })); }catch(e){}
 }
 function ssRestoreCtl(){
@@ -3715,11 +3913,12 @@ function ssRestoreCtl(){
     if(c.step) document.getElementById('ssStep').value = c.step;
     if(c.fill) document.getElementById('ssFill').value = c.fill; }catch(e){}
 }
-function ssOnSupplierChange(){ ssForceOne = false; ssEdit = null; renderSupPlan(); }
+function ssOnSupplierChange(){ ssForceOne = false; ssFillWhControls(); renderSupPlan(); }
 
 async function renderSupStock(reload){
   if(reload || !supStock.length) await loadSupStock();
   const sel = document.getElementById('ssSupplier'), cur = sel.value;
+  if(reload===false){} // данные уже загружены
   const cnt = {}; supStock.forEach(r=>{ cnt[r.supplier_id] = (cnt[r.supplier_id]||0) + Number(r.quantity||0); });
   const sups = [...suppliers].sort((a,b)=> (cnt[b.id]?1:0)-(cnt[a.id]?1:0) || a.name.localeCompare(b.name));
   sel.innerHTML = sups.length ? sups.map(s=>`<option value="${s.id}">${escHtml(s.name)}${cnt[s.id]?' · готово '+fmt(cnt[s.id]/1000).toLocaleString()+' т':''}</option>`).join('') : '<option value="">— сначала добавьте поставщика —</option>';
@@ -3727,6 +3926,7 @@ async function renderSupStock(reload){
   if(!document.getElementById('ssAsOf').value) document.getElementById('ssAsOf').value = todayISO();
   if(!document.getElementById('ssEta').value){ const d = new Date(); d.setDate(d.getDate()+14); document.getElementById('ssEta').value = d.toISOString().slice(0,10); }
   ssRestoreCtl();
+  ssFillWhControls();
   document.getElementById('ssError').textContent = supStockError;
   renderSupPlan();
 }
@@ -3738,7 +3938,7 @@ function ssPlanFor(sid){
   const fill = document.getElementById('ssFill').value==='fill' || ssForceOne;
   const orderMap = {}; buildOrderRows().forEach(r=>{ orderMap[r.p.id] = r; });
   const ready = {};
-  supStock.filter(r=>r.supplier_id===sid && r.product_id && Number(r.quantity)>0)
+  ssRowsSel(sid).filter(r=>r.product_id && Number(r.quantity)>0)
     .forEach(r=>{ ready[r.product_id] = (ready[r.product_id]||0) + Number(r.quantity); });
   const prioRank = {high:0, medium:1, low:2};
   const items = Object.keys(ready).map(Number).map(pid=>{
@@ -3792,11 +3992,13 @@ function renderSupPlan(){
   const host = document.getElementById('ssPlan'); if(!host) return;
   const sid = Number(document.getElementById('ssSupplier').value);
   const sup = suppliers.find(s=>s.id===sid);
-  const rowsAll = supStock.filter(r=>r.supplier_id===sid);
+  renderSupWhOverview();
+  const wh = ssSelWh();
+  const rowsAll = ssRowsSel(sid);
   const asOf = rowsAll.length ? rowsAll.map(r=>r.as_of).sort().pop() : null;
   const unmatched = rowsAll.filter(r=>!r.product_id);
   document.getElementById('ssStockInfo').textContent = rowsAll.length
-    ? `Остаток ${sup?.name||''} на ${new Date(asOf+'T00:00:00').toLocaleDateString('ru-RU')}: ${rowsAll.length} позиций, ${fmt(rowsAll.reduce((s,r)=>s+Number(r.quantity),0)).toLocaleString()} кг`
+    ? `${sup?.name||''} · ${wh==='__all'?'все склады':'склад «'+whName(wh)+'»'} на ${new Date(asOf+'T00:00:00').toLocaleDateString('ru-RU')}: ${rowsAll.length} позиций, ${fmt(rowsAll.reduce((s,r)=>s+Number(r.quantity),0)).toLocaleString()} кг`
       + (unmatched.length ? ` · не сопоставлено ${unmatched.length}` : '')
       + ((Date.now()-new Date(asOf+'T00:00:00'))/86400000 > 7 ? ' · ⚠️ данные старше недели' : '')
     : '';
@@ -3806,20 +4008,23 @@ function renderSupPlan(){
   if(!sid || !rowsAll.length){
     ssLastPlan = null;
     host.innerHTML = `<div class="empty">${supStockError ? escHtml(supStockError) : 'Для этого поставщика остаток ещё не загружен — загрузите его выше.'}</div>`;
-    tb.innerHTML = '<tr><td colspan="9" class="empty">Нет данных</td></tr>';
+    tb.innerHTML = '<tr><td colspan="10" class="empty">Нет данных</td></tr>';
     return;
   }
-  const plan = ssPlanFor(sid); ssLastPlan = { plan, sid };
-  if(ssEdit && ssEdit.sid!==sid) ssEdit = null;
+  const plan = ssPlanFor(sid); ssLastPlan = { plan, sid, wh };
+  ssEdit = ssEditStore[ssKey(sid, wh)] || null;
   const trucksNow = ssCurrentTrucks();
   const planned = {}; trucksNow.forEach(t=>t.lines.forEach(l=>{ planned[l.pid] = (planned[l.pid]||0) + (Number(l.qty)||0); }));
 
   // таблица «готово у поставщика»
   const byPid = {}; plan.items.forEach(x=>{ byPid[x.p.id] = x; });
   const stockRows = [...plan.items].sort((a,b)=>productOrderCmp(a.p,b.p));
+  const whOf = pid=>{ const m = {}; rowsAll.filter(r=>r.product_id===pid && Number(r.quantity)>0).forEach(r=>{ m[whName(r.warehouse)] = (m[whName(r.warehouse)]||0) + Number(r.quantity); });
+    return Object.entries(m).map(([w,q])=> Object.keys(m).length>1 ? `${escHtml(w)} ${fmt(q).toLocaleString()}` : escHtml(w)).join('<br>'); };
   tb.innerHTML = stockRows.map(x=>`<tr data-pcard="${x.p.id}" style="cursor:pointer">
       <td>${isImportantPriority(x.p)?(x.p.priority==='high'?'🔴 ':'🟠 '):''}${escHtml(productLabel(x.p))}</td>
       <td>${typeBadgeHtml(x.p.type)}</td>
+      <td style="font-size:12px;color:var(--text-2)">${whOf(x.p.id)}</td>
       <td class="num"><b>${fmt(x.ready).toLocaleString()}</b></td>
       <td class="num" style="color:${x.bal<=0?'var(--red)':'inherit'}">${fmt(x.bal).toLocaleString()}</td>
       <td class="num">${x.pending?fmt(x.pending).toLocaleString():'—'}</td>
@@ -3827,14 +4032,26 @@ function renderSupPlan(){
       <td class="num" data-sort="${isFinite(x.cover)?x.cover:999999}">${isFinite(x.cover)?Math.floor(x.cover):'∞'}</td>
       <td class="num" style="color:${x.need>0?'var(--red)':'var(--text-3)'}">${x.need>0?fmt(x.need).toLocaleString():'—'}</td>
       <td class="num"><b>${planned[x.p.id]?fmt(planned[x.p.id]).toLocaleString():'—'}</b></td>
-    </tr>`).join('') + unmatched.map(r=>`<tr class="ss-unmatched"><td colspan="2">${escHtml(r.raw_name)} <span class="pc-note" style="display:inline">не сопоставлено</span></td><td class="num">${fmt(r.quantity).toLocaleString()}</td><td colspan="6"></td></tr>`).join('')
-    || '<tr><td colspan="9" class="empty">Нет данных</td></tr>';
+    </tr>`).join('') + unmatched.map(r=>`<tr class="ss-unmatched"><td colspan="2">${escHtml(r.raw_name)} <span class="pc-note" style="display:inline">не сопоставлено</span></td><td style="font-size:12px">${escHtml(whName(r.warehouse))}</td><td class="num">${fmt(r.quantity).toLocaleString()}</td><td colspan="6"></td></tr>`).join('')
+    || '<tr><td colspan="10" class="empty">Нет данных</td></tr>';
 
   renderSupTrucks();
 }
 
 // ── машины: ручная правка плана ──
-let ssEdit = null;            // { sid, trucks:[{lines:[{pid,qty,kind}]}] } — если план правили руками
+let ssEdit = null;            // { sid, wh, trucks:[{lines:[{pid,qty,kind}]}] } — план машин, исправленный руками
+// правки хранятся отдельно для каждого поставщика/склада и переживают перезагрузку страницы
+const ssKey = (sid, wh)=> sid+'|'+(wh??'');
+let ssEditStore = (()=>{ try{ return JSON.parse(localStorage.getItem('ss_plan_edits')||'{}'); }catch(e){ return {}; } })();
+function ssPersistEdits(){
+  if(ssEdit) ssEditStore[ssKey(ssEdit.sid, ssEdit.wh)] = ssEdit;
+  try{ localStorage.setItem('ss_plan_edits', JSON.stringify(ssEditStore)); }catch(e){}
+}
+function ssDropEdit(sid, wh){
+  delete ssEditStore[ssKey(sid, wh)];
+  if(ssEdit && ssEdit.sid===sid && ssEdit.wh===wh) ssEdit = null;
+  try{ localStorage.setItem('ss_plan_edits', JSON.stringify(ssEditStore)); }catch(e){}
+}
 
 // подпись товара в машине: вид основы + формат (+ цвет/название, если это не белый рулон)
 function ssTruckLabel(p){
@@ -3843,19 +4060,19 @@ function ssTruckLabel(p){
   return p.type+' · '+fmtTxt + (isWhiteRoll(p) ? '' : ' · '+p.name);
 }
 function ssCurrentTrucks(){
-  if(ssEdit && ssLastPlan && ssEdit.sid===ssLastPlan.sid) return ssEdit.trucks;
+  if(ssEdit && ssLastPlan && ssEdit.sid===ssLastPlan.sid && ssEdit.wh===ssLastPlan.wh) return ssEdit.trucks;
   if(!ssLastPlan) return [];
   return ssLastPlan.plan.trucks.map(t=>({ lines: t.lines.map(l=>({ pid:l.x.p.id, qty:Math.round(l.qty), kind:l.kind })) }));
 }
 function ssReadyMap(sid){
-  const m = {}; supStock.filter(r=>r.supplier_id===sid && r.product_id).forEach(r=>{ m[r.product_id] = (m[r.product_id]||0) + Number(r.quantity||0); });
+  const m = {}; ssRowsSel(sid).filter(r=>r.product_id).forEach(r=>{ m[r.product_id] = (m[r.product_id]||0) + Number(r.quantity||0); });
   return m;
 }
 function ssBeginEdit(){
-  if(!ssEdit) ssEdit = { sid: ssLastPlan.sid, trucks: JSON.parse(JSON.stringify(ssCurrentTrucks())) };
+  if(!ssEdit){ ssEdit = { sid: ssLastPlan.sid, wh: ssLastPlan.wh, trucks: JSON.parse(JSON.stringify(ssCurrentTrucks())) }; ssPersistEdits(); }
   return ssEdit.trucks;
 }
-function ssAfterEdit(){ renderSupPlan(); }
+function ssAfterEdit(){ ssPersistEdits(); renderSupPlan(); }
 function ssSetQty(ti, li, v){ const t = ssBeginEdit(); t[ti].lines[li].qty = Math.max(0, Math.round(parseFloat(v)||0)); ssAfterEdit(); }
 function ssDelLine(ti, li){ const t = ssBeginEdit(); t[ti].lines.splice(li,1); ssAfterEdit(); }
 function ssDelTruck(ti){ const t = ssBeginEdit(); t.splice(ti,1); ssAfterEdit(); }
@@ -3876,7 +4093,7 @@ function ssAddLine(ti){
   if(ex) ex.qty += qty; else t[ti].lines.push({ pid, qty, kind:'manual' });
   ssAfterEdit();
 }
-function ssResetEdit(){ ssEdit = null; renderSupPlan(); }
+function ssResetEdit(){ if(ssLastPlan) ssDropEdit(ssLastPlan.sid, ssLastPlan.wh); ssEdit = null; renderSupPlan(); }
 
 function renderSupTrucks(){
   const host = document.getElementById('ssPlan');
@@ -3958,8 +4175,9 @@ async function ssCreateDeliveries(){
   const sup = suppliers.find(s=>s.id===sid);
   if(!confirm(`Создать ${trucks.length} машин(ы) от ${sup?.name||''} в разделе Deliveries со статусом «в пути»?`+(over>=0?`\n\n⚠️ Машина ${over+1} перегружена.`:''))) return;
   const stamp = new Date().toLocaleDateString('ru-RU',{day:'2-digit',month:'2-digit'});
+  const whTxt = ssLastPlan.wh && ssLastPlan.wh!=='__all' && ssLastPlan.wh!=='' ? ' · '+ssLastPlan.wh : '';
   const rows = [];
-  trucks.forEach((t,i)=> t.lines.forEach(l=> rows.push({ product_id:l.pid, supplier_id:sid, quantity:Math.round(Number(l.qty)), expected_date:eta, status:'pending', plate_no:`План ${stamp} · машина ${i+1}` })));
+  trucks.forEach((t,i)=> t.lines.forEach(l=> rows.push({ product_id:l.pid, supplier_id:sid, quantity:Math.round(Number(l.qty)), expected_date:eta, status:'pending', plate_no:`План ${stamp}${whTxt} · машина ${i+1}` })));
   const { data, error } = await sb.from('deliveries').insert(rows).select('id');
   if(error){ toast('Ошибка: '+error.message, true); return; }
   if(!data || data.length<rows.length){ toast('Не все строки сохранены — нет прав', true); return; }
@@ -3967,7 +4185,7 @@ async function ssCreateDeliveries(){
   const taken = {}; rows.forEach(r=>{ taken[r.product_id] = (taken[r.product_id]||0) + r.quantity; });
   for(const pid of Object.keys(taken).map(Number)){
     let left = taken[pid];
-    for(const st of supStock.filter(x=>x.supplier_id===sid && x.product_id===pid)){
+    for(const st of ssRowsSel(sid, ssLastPlan.wh).filter(x=>x.product_id===pid)){
       if(left<=0) break;
       const q = Number(st.quantity), nq = Math.max(0, Math.round((q-left)*100)/100);
       left -= (q-nq);
@@ -3976,8 +4194,8 @@ async function ssCreateDeliveries(){
   }
   toast(`Создано ${trucks.length} машин(ы), ${rows.length} строк в Deliveries ✓ · остаток поставщика уменьшен`);
   await Promise.all([loadDeliveries(), loadSupStock()]);
-  ssForceOne = false; ssEdit = null;
-  renderSupPlan();
+  ssForceOne = false; ssDropEdit(sid, ssLastPlan.wh);
+  renderSupPlan(); renderForecast(); renderLevels(); renderOrders();
 }
 
 async function ssExportPlan(){
@@ -3986,7 +4204,8 @@ async function ssExportPlan(){
   const trucks = ssCurrentTrucks();
   const sup = suppliers.find(s=>s.id===sid);
   await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
-  const aoa = [['Заказ SoftStock' + (sup?' — '+sup.name:'')], ['Дата', new Date().toLocaleDateString('ru-RU')], [],
+  const whT = ssLastPlan.wh && ssLastPlan.wh!=='__all' ? whName(ssLastPlan.wh) : 'все склады';
+  const aoa = [['Заказ SoftStock' + (sup?' — '+sup.name:'')], ['Склад', whT], ['Дата', new Date().toLocaleDateString('ru-RU')], [],
     ['Машина','Вид основы','Ширина, см','Слои','GSM','Цвет / название','Количество, кг']];
   trucks.forEach((t,i)=>{
     let tot = 0;
@@ -3998,4 +4217,103 @@ async function ssExportPlan(){
   const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{wch:12},{wch:16},{wch:11},{wch:6},{wch:6},{wch:20},{wch:15}];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Заказ');
   XLSX.writeFile(wb, `Заказ_${(sup?.name||'поставщик').replace(/[^\wА-Яа-яԱ-Ֆա-ֆ-]+/g,'_')}_${todayISO()}.xlsx`);
+}
+
+
+// ---------------------------------------------------------------
+// FORECAST → «＋ в машину» (план машин поставщика/склада)
+// ---------------------------------------------------------------
+function fcPlannedQty(pid, sid, wh){
+  const e = ssEditStore[ssKey(sid, wh)]; if(!e) return 0;
+  return e.trucks.reduce((a,t)=>a+t.lines.filter(l=>l.pid===pid).reduce((b,l)=>b+(Number(l.qty)||0),0),0);
+}
+// план для поставщика/склада: сохранённые правки или свежий расчёт
+function fcGetPlanTrucks(sid, wh){
+  const k = ssKey(sid, wh);
+  if(ssEditStore[k]) return ssEditStore[k].trucks;
+  const supSel = document.getElementById('ssSupplier'), whSel = document.getElementById('ssWh');
+  const prevSid = supSel.value, prevWh = whSel.value;
+  if(![...supSel.options].length) renderSupStock(false);
+  supSel.value = String(sid); ssFillWhControls(wh);
+  renderSupPlan();                                     // считает ssLastPlan для этого склада
+  const trucks = JSON.parse(JSON.stringify(ssCurrentTrucks()));
+  supSel.value = prevSid; ssFillWhControls(prevWh); renderSupPlan();
+  return trucks;
+}
+let fcAddCtx = null;
+function fcAddToTruck(pid, sid, wh){
+  const p = products.find(x=>x.id===pid), sup = suppliers.find(x=>x.id===sid);
+  const readyAll = supStock.filter(r=>r.supplier_id===sid && (r.warehouse||'')===wh && r.product_id===pid).reduce((a,r)=>a+Number(r.quantity||0),0);
+  const capKg = Math.max(500, (parseFloat(document.getElementById('ssCap').value)||18)*1000);
+  const step = Math.max(1, parseFloat(document.getElementById('ssStep').value)||500);
+  const trucks = fcGetPlanTrucks(sid, wh);
+  const used = trucks.reduce((a,t)=>a+t.lines.filter(l=>l.pid===pid).reduce((b,l)=>b+(Number(l.qty)||0),0),0);
+  const free = Math.max(0, readyAll - used);
+  const o = buildOrderRows().find(r=>r.p.id===pid);
+  const need = o ? Math.max(0, o.targetQty - (Number(p.balance)||0) - o.pending - used) : 0;
+  const def = Math.max(0, Math.min(free, need>0 ? Math.ceil(need/step)*step : free));
+  fcAddCtx = { pid, sid, wh, capKg, free };
+  let m = document.getElementById('fcAddModal');
+  if(!m){ m = document.createElement('div'); m.id = 'fcAddModal'; m.className = 'modal-bg'; document.body.appendChild(m);
+    m.addEventListener('click', e=>{ if(e.target===m) fcCloseAdd(); }); }
+  const tot = t=> t.lines.reduce((a,l)=>a+(Number(l.qty)||0),0);
+  m.innerHTML = `<div class="fc-add-box">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
+      <div><div style="font-size:15px;font-weight:700">🚛 Добавить в машину</div>
+        <div class="pc-note" style="margin:2px 0 0">${escHtml(sup?.name||'')} · склад «${escHtml(whName(wh))}»</div></div>
+      <button class="ss-x" onclick="fcCloseAdd()" style="font-size:16px">✕</button>
+    </div>
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">${escHtml(ssTruckLabel(p))}</div>
+    <div class="fc-add-stats">
+      <div><span>Готово у поставщика</span><b>${fmt(readyAll).toLocaleString()} кг</b></div>
+      <div><span>Уже в плане</span><b>${fmt(used).toLocaleString()} кг</b></div>
+      <div><span>Нужно до цели</span><b style="color:${need>0?'var(--red)':'inherit'}">${need>0?fmt(need).toLocaleString()+' кг':'—'}</b></div>
+    </div>
+    ${free<=0?`<div class="pc-note" style="color:var(--amber);margin:-4px 0 10px">Весь готовый остаток этого склада уже в расчёте машин. Можно добавить больше вручную — программа предупредит.</div>`:''}
+    <div class="form-row"><label>Сколько добавить, кг (свободно ${fmt(free).toLocaleString()})</label>
+      <input type="number" id="fcAddQty" min="0" step="${step}" value="${Math.round(def)}"></div>
+    <div class="form-row"><label>В какую машину</label><select id="fcAddTruck">
+      <option value="auto">Автоматически — куда поместится</option>
+      ${trucks.map((t,i)=>`<option value="${i}">Машина ${i+1} — свободно ${fmt(Math.max(0,capKg-tot(t))).toLocaleString()} кг</option>`).join('')}
+      <option value="new">Новая машина</option>
+    </select></div>
+    <div class="auth-error" id="fcAddErr"></div>
+    <div class="svc-btns" style="justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-ghost" onclick="fcCloseAdd()">Отмена</button>
+      <button class="btn btn-brand" onclick="fcConfirmAdd()">＋ Добавить</button>
+    </div>
+  </div>`;
+  m.classList.remove('hidden'); m.style.display = 'flex';
+  setTimeout(()=>document.getElementById('fcAddQty')?.select(), 30);
+}
+function fcCloseAdd(){ const m = document.getElementById('fcAddModal'); if(m){ m.style.display = 'none'; } fcAddCtx = null; }
+function fcConfirmAdd(){
+  const c = fcAddCtx; if(!c) return;
+  const qty = Math.round(parseFloat(document.getElementById('fcAddQty').value)||0);
+  const err = document.getElementById('fcAddErr');
+  if(!(qty>0)){ err.textContent = 'Укажите количество.'; return; }
+  if(qty > c.free + 0.5 && !confirm(`У поставщика свободно только ${fmt(c.free).toLocaleString()} кг. Всё равно добавить ${fmt(qty).toLocaleString()} кг?`)) return;
+  const k = ssKey(c.sid, c.wh);
+  const trucks = JSON.parse(JSON.stringify(fcGetPlanTrucks(c.sid, c.wh)));
+  const tot = t=> t.lines.reduce((a,l)=>a+(Number(l.qty)||0),0);
+  const put = (ti, q)=>{ while(ti>=trucks.length) trucks.push({ lines:[] });
+    const ex = trucks[ti].lines.find(l=>l.pid===c.pid); if(ex) ex.qty += q; else trucks[ti].lines.push({ pid:c.pid, qty:q, kind:'manual' }); };
+  const choice = document.getElementById('fcAddTruck').value;
+  const touched = new Set();
+  if(choice==='auto'){
+    let left = qty;
+    for(let i=0; left>0 && i<trucks.length; i++){ const room = c.capKg - tot(trucks[i]); if(room>0){ const q = Math.min(room, left); put(i, q); touched.add(i+1); left -= q; } }
+    while(left>0){ const i = trucks.length; const q = Math.min(c.capKg, left); put(i, q); touched.add(i+1); left -= q; }
+  } else if(choice==='new'){ put(trucks.length, qty); touched.add(trucks.length); }
+  else { put(Number(choice), qty); touched.add(Number(choice)+1); }
+  ssEditStore[k] = { sid:c.sid, wh:c.wh, trucks };
+  if(ssEdit && ssEdit.sid===c.sid && ssEdit.wh===c.wh) ssEdit = ssEditStore[k];
+  try{ localStorage.setItem('ss_plan_edits', JSON.stringify(ssEditStore)); }catch(e){}
+  const sup = suppliers.find(x=>x.id===c.sid);
+  fcCloseAdd();
+  toast(`Добавлено ${fmt(qty).toLocaleString()} кг → ${sup?.name||''} · ${whName(c.wh)}, машина ${[...touched].join(', ')}. Поставки создаются в «Склад поставщика».`);
+  renderForecast();
+  if(document.getElementById('pane-supstock')?.classList.contains('active')) renderSupPlan();
+  const pc = document.getElementById('productCardModal');
+  if(pc && !pc.classList.contains('hidden') && pcState.pid===c.pid){ const pp = products.find(x=>x.id===c.pid); if(pp) renderPcSupStock(pp); }
 }
