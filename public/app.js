@@ -1419,11 +1419,13 @@ function renderForecast(){
         </div>` : '';
       const supRows = (typeof supStock!=='undefined' ? supStock : []).filter(x=>x.product_id===p.id && Number(x.quantity)>0);
       const supAgg = {}; supRows.forEach(x=>{ const sn = (suppliers.find(z=>z.id===x.supplier_id)?.name||'?') + (x.warehouse ? ' · '+x.warehouse : '');
-        (supAgg[sn] = supAgg[sn] || { kg:0, asOf:'' }); supAgg[sn].kg += Number(x.quantity); if((x.as_of||'')>supAgg[sn].asOf) supAgg[sn].asOf = x.as_of; });
+        (supAgg[sn] = supAgg[sn] || { kg:0, asOf:'', sid:x.supplier_id, wh:x.warehouse||'' }); supAgg[sn].kg += Number(x.quantity); if((x.as_of||'')>supAgg[sn].asOf) supAgg[sn].asOf = x.as_of; });
       const supTotal = Object.values(supAgg).reduce((a,v)=>a+v.kg,0);
       const supplierSection = supTotal>0 ? `<div class="fc-sup">
           <div class="fc-sup-h">🏭 Готово у поставщика: ${fmt(supTotal).toLocaleString()} кг</div>
-          ${Object.entries(supAgg).sort((a,b)=>b[1].kg-a[1].kg).map(([n,v])=>`<div class="fc-sup-r"><span>${escHtml(n)}${v.asOf?` <span style="color:var(--text-3)">· ${v.asOf.slice(8,10)}.${v.asOf.slice(5,7)}</span>`:''}</span><b>${fmt(v.kg).toLocaleString()} кг</b></div>`).join('')}
+          ${Object.entries(supAgg).sort((a,b)=>b[1].kg-a[1].kg).map(([n,v])=>{ const inPlan = fcPlannedQty(p.id, v.sid, v.wh);
+            return `<div class="fc-sup-r"><span>${escHtml(n)}${v.asOf?` <span style="color:var(--text-3)">· ${v.asOf.slice(8,10)}.${v.asOf.slice(5,7)}</span>`:''}${inPlan?`<br><span class="fc-inplan">🚛 в плане ${fmt(inPlan).toLocaleString()} кг</span>`:''}</span>
+              <span style="display:flex;align-items:center;gap:6px;flex-shrink:0"><b>${fmt(v.kg).toLocaleString()} кг</b>${canEdit()?`<button class="fc-add" title="Добавить в машину" onclick="event.stopPropagation();fcAddToTruck(${p.id},${v.sid},${escHtml(JSON.stringify(v.wh))})">＋ в машину</button>`:''}</span></div>`; }).join('')}
         </div>` : '';
       return `<div class="fc-card" data-pcard="${p.id}" title="Открыть карточку товара" style="background:${s.bg};border-color:${s.border}">
         <div style="display:flex;align-items:center;justify-content:space-between">
@@ -3487,7 +3489,7 @@ function ssWarehousesOf(sid){
 }
 function ssSelectWh(sid, wh){
   document.getElementById('ssSupplier').value = String(sid);
-  ssEdit = null; ssForceOne = false;
+  ssForceOne = false;
   ssFillWhControls(wh);
   renderSupPlan();
   document.getElementById('ssPlan').scrollIntoView({behavior:'smooth', block:'start'});
@@ -3531,7 +3533,7 @@ async function ssClearWh(sid, wh){
   if(error){ toast('Ошибка: '+error.message, true); return; }
   if(!data || !data.length){ toast('Не удалено — нет прав', true); return; }
   toast('Остаток склада удалён ✓');
-  ssEdit = null; await renderSupStock(true);
+  ssDropEdit(sid, wh); await renderSupStock(true);
   renderForecast();
 }
 
@@ -3857,7 +3859,7 @@ async function ssSave(){
     if(!ins.data || ins.data.length < rows.length) throw new Error('не сохранено — нет прав на изменение');
     toast('Остаток сохранён ✓ — склад «'+whName(wh)+'», '+rows.length+' строк');
     ssCancelPreview(); document.getElementById('ssPaste').value='';
-    ssForceOne = false; ssEdit = null;
+    ssForceOne = false; ssDropEdit(sid, wh);
     await loadSupStock();
     ssFillWhControls(wh);
     await renderSupStock(false);
@@ -3868,8 +3870,8 @@ async function ssSave(){
 
 // настройки расчёта запоминаются в браузере
 function ssSaveCtl(){
-  if(ssEdit && !confirm('Пересчитать машины заново? Ручные правки плана будут сброшены.')){ ssRestoreCtl(); return; }
-  ssEdit = null;
+  if(Object.keys(ssEditStore).length && !confirm('Пересчитать машины заново? Ручные правки планов (и добавленное из Forecast) будут сброшены.')){ ssRestoreCtl(); return; }
+  ssEdit = null; ssEditStore = {}; try{ localStorage.setItem('ss_plan_edits','{}'); }catch(e){}
   try{ localStorage.setItem('ss_plan_ctl', JSON.stringify({ cap:document.getElementById('ssCap').value, step:document.getElementById('ssStep').value, fill:document.getElementById('ssFill').value })); }catch(e){}
 }
 function ssRestoreCtl(){
@@ -3878,7 +3880,7 @@ function ssRestoreCtl(){
     if(c.step) document.getElementById('ssStep').value = c.step;
     if(c.fill) document.getElementById('ssFill').value = c.fill; }catch(e){}
 }
-function ssOnSupplierChange(){ ssForceOne = false; ssEdit = null; ssFillWhControls(); renderSupPlan(); }
+function ssOnSupplierChange(){ ssForceOne = false; ssFillWhControls(); renderSupPlan(); }
 
 async function renderSupStock(reload){
   if(reload || !supStock.length) await loadSupStock();
@@ -3977,7 +3979,7 @@ function renderSupPlan(){
     return;
   }
   const plan = ssPlanFor(sid); ssLastPlan = { plan, sid, wh };
-  if(ssEdit && (ssEdit.sid!==sid || ssEdit.wh!==wh)) ssEdit = null;
+  ssEdit = ssEditStore[ssKey(sid, wh)] || null;
   const trucksNow = ssCurrentTrucks();
   const planned = {}; trucksNow.forEach(t=>t.lines.forEach(l=>{ planned[l.pid] = (planned[l.pid]||0) + (Number(l.qty)||0); }));
 
@@ -4004,7 +4006,19 @@ function renderSupPlan(){
 }
 
 // ── машины: ручная правка плана ──
-let ssEdit = null;            // { sid, trucks:[{lines:[{pid,qty,kind}]}] } — если план правили руками
+let ssEdit = null;            // { sid, wh, trucks:[{lines:[{pid,qty,kind}]}] } — план машин, исправленный руками
+// правки хранятся отдельно для каждого поставщика/склада и переживают перезагрузку страницы
+const ssKey = (sid, wh)=> sid+'|'+(wh??'');
+let ssEditStore = (()=>{ try{ return JSON.parse(localStorage.getItem('ss_plan_edits')||'{}'); }catch(e){ return {}; } })();
+function ssPersistEdits(){
+  if(ssEdit) ssEditStore[ssKey(ssEdit.sid, ssEdit.wh)] = ssEdit;
+  try{ localStorage.setItem('ss_plan_edits', JSON.stringify(ssEditStore)); }catch(e){}
+}
+function ssDropEdit(sid, wh){
+  delete ssEditStore[ssKey(sid, wh)];
+  if(ssEdit && ssEdit.sid===sid && ssEdit.wh===wh) ssEdit = null;
+  try{ localStorage.setItem('ss_plan_edits', JSON.stringify(ssEditStore)); }catch(e){}
+}
 
 // подпись товара в машине: вид основы + формат (+ цвет/название, если это не белый рулон)
 function ssTruckLabel(p){
@@ -4022,10 +4036,10 @@ function ssReadyMap(sid){
   return m;
 }
 function ssBeginEdit(){
-  if(!ssEdit) ssEdit = { sid: ssLastPlan.sid, wh: ssLastPlan.wh, trucks: JSON.parse(JSON.stringify(ssCurrentTrucks())) };
+  if(!ssEdit){ ssEdit = { sid: ssLastPlan.sid, wh: ssLastPlan.wh, trucks: JSON.parse(JSON.stringify(ssCurrentTrucks())) }; ssPersistEdits(); }
   return ssEdit.trucks;
 }
-function ssAfterEdit(){ renderSupPlan(); }
+function ssAfterEdit(){ ssPersistEdits(); renderSupPlan(); }
 function ssSetQty(ti, li, v){ const t = ssBeginEdit(); t[ti].lines[li].qty = Math.max(0, Math.round(parseFloat(v)||0)); ssAfterEdit(); }
 function ssDelLine(ti, li){ const t = ssBeginEdit(); t[ti].lines.splice(li,1); ssAfterEdit(); }
 function ssDelTruck(ti){ const t = ssBeginEdit(); t.splice(ti,1); ssAfterEdit(); }
@@ -4046,7 +4060,7 @@ function ssAddLine(ti){
   if(ex) ex.qty += qty; else t[ti].lines.push({ pid, qty, kind:'manual' });
   ssAfterEdit();
 }
-function ssResetEdit(){ ssEdit = null; renderSupPlan(); }
+function ssResetEdit(){ if(ssLastPlan) ssDropEdit(ssLastPlan.sid, ssLastPlan.wh); ssEdit = null; renderSupPlan(); }
 
 function renderSupTrucks(){
   const host = document.getElementById('ssPlan');
@@ -4147,7 +4161,7 @@ async function ssCreateDeliveries(){
   }
   toast(`Создано ${trucks.length} машин(ы), ${rows.length} строк в Deliveries ✓ · остаток поставщика уменьшен`);
   await Promise.all([loadDeliveries(), loadSupStock()]);
-  ssForceOne = false; ssEdit = null;
+  ssForceOne = false; ssDropEdit(sid, ssLastPlan.wh);
   renderSupPlan(); renderForecast();
 }
 
@@ -4170,4 +4184,101 @@ async function ssExportPlan(){
   const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = [{wch:12},{wch:16},{wch:11},{wch:6},{wch:6},{wch:20},{wch:15}];
   const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, ws, 'Заказ');
   XLSX.writeFile(wb, `Заказ_${(sup?.name||'поставщик').replace(/[^\wА-Яа-яԱ-Ֆա-ֆ-]+/g,'_')}_${todayISO()}.xlsx`);
+}
+
+
+// ---------------------------------------------------------------
+// FORECAST → «＋ в машину» (план машин поставщика/склада)
+// ---------------------------------------------------------------
+function fcPlannedQty(pid, sid, wh){
+  const e = ssEditStore[ssKey(sid, wh)]; if(!e) return 0;
+  return e.trucks.reduce((a,t)=>a+t.lines.filter(l=>l.pid===pid).reduce((b,l)=>b+(Number(l.qty)||0),0),0);
+}
+// план для поставщика/склада: сохранённые правки или свежий расчёт
+function fcGetPlanTrucks(sid, wh){
+  const k = ssKey(sid, wh);
+  if(ssEditStore[k]) return ssEditStore[k].trucks;
+  const supSel = document.getElementById('ssSupplier'), whSel = document.getElementById('ssWh');
+  const prevSid = supSel.value, prevWh = whSel.value;
+  if(![...supSel.options].length) renderSupStock(false);
+  supSel.value = String(sid); ssFillWhControls(wh);
+  renderSupPlan();                                     // считает ssLastPlan для этого склада
+  const trucks = JSON.parse(JSON.stringify(ssCurrentTrucks()));
+  supSel.value = prevSid; ssFillWhControls(prevWh); renderSupPlan();
+  return trucks;
+}
+let fcAddCtx = null;
+function fcAddToTruck(pid, sid, wh){
+  const p = products.find(x=>x.id===pid), sup = suppliers.find(x=>x.id===sid);
+  const readyAll = supStock.filter(r=>r.supplier_id===sid && (r.warehouse||'')===wh && r.product_id===pid).reduce((a,r)=>a+Number(r.quantity||0),0);
+  const capKg = Math.max(500, (parseFloat(document.getElementById('ssCap').value)||18)*1000);
+  const step = Math.max(1, parseFloat(document.getElementById('ssStep').value)||500);
+  const trucks = fcGetPlanTrucks(sid, wh);
+  const used = trucks.reduce((a,t)=>a+t.lines.filter(l=>l.pid===pid).reduce((b,l)=>b+(Number(l.qty)||0),0),0);
+  const free = Math.max(0, readyAll - used);
+  const o = buildOrderRows().find(r=>r.p.id===pid);
+  const need = o ? Math.max(0, o.targetQty - (Number(p.balance)||0) - o.pending - used) : 0;
+  const def = Math.max(0, Math.min(free, need>0 ? Math.ceil(need/step)*step : free));
+  fcAddCtx = { pid, sid, wh, capKg, free };
+  let m = document.getElementById('fcAddModal');
+  if(!m){ m = document.createElement('div'); m.id = 'fcAddModal'; m.className = 'modal-bg'; document.body.appendChild(m);
+    m.addEventListener('click', e=>{ if(e.target===m) fcCloseAdd(); }); }
+  const tot = t=> t.lines.reduce((a,l)=>a+(Number(l.qty)||0),0);
+  m.innerHTML = `<div class="fc-add-box">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:10px">
+      <div><div style="font-size:15px;font-weight:700">🚛 Добавить в машину</div>
+        <div class="pc-note" style="margin:2px 0 0">${escHtml(sup?.name||'')} · склад «${escHtml(whName(wh))}»</div></div>
+      <button class="ss-x" onclick="fcCloseAdd()" style="font-size:16px">✕</button>
+    </div>
+    <div style="font-size:13px;font-weight:600;margin-bottom:8px">${escHtml(ssTruckLabel(p))}</div>
+    <div class="fc-add-stats">
+      <div><span>Готово у поставщика</span><b>${fmt(readyAll).toLocaleString()} кг</b></div>
+      <div><span>Уже в плане</span><b>${fmt(used).toLocaleString()} кг</b></div>
+      <div><span>Нужно до цели</span><b style="color:${need>0?'var(--red)':'inherit'}">${need>0?fmt(need).toLocaleString()+' кг':'—'}</b></div>
+    </div>
+    ${free<=0?`<div class="pc-note" style="color:var(--amber);margin:-4px 0 10px">Весь готовый остаток этого склада уже в расчёте машин. Можно добавить больше вручную — программа предупредит.</div>`:''}
+    <div class="form-row"><label>Сколько добавить, кг (свободно ${fmt(free).toLocaleString()})</label>
+      <input type="number" id="fcAddQty" min="0" step="${step}" value="${Math.round(def)}"></div>
+    <div class="form-row"><label>В какую машину</label><select id="fcAddTruck">
+      <option value="auto">Автоматически — куда поместится</option>
+      ${trucks.map((t,i)=>`<option value="${i}">Машина ${i+1} — свободно ${fmt(Math.max(0,capKg-tot(t))).toLocaleString()} кг</option>`).join('')}
+      <option value="new">Новая машина</option>
+    </select></div>
+    <div class="auth-error" id="fcAddErr"></div>
+    <div class="svc-btns" style="justify-content:flex-end;margin-top:8px">
+      <button class="btn btn-ghost" onclick="fcCloseAdd()">Отмена</button>
+      <button class="btn btn-brand" onclick="fcConfirmAdd()">＋ Добавить</button>
+    </div>
+  </div>`;
+  m.classList.remove('hidden'); m.style.display = 'flex';
+  setTimeout(()=>document.getElementById('fcAddQty')?.select(), 30);
+}
+function fcCloseAdd(){ const m = document.getElementById('fcAddModal'); if(m){ m.style.display = 'none'; } fcAddCtx = null; }
+function fcConfirmAdd(){
+  const c = fcAddCtx; if(!c) return;
+  const qty = Math.round(parseFloat(document.getElementById('fcAddQty').value)||0);
+  const err = document.getElementById('fcAddErr');
+  if(!(qty>0)){ err.textContent = 'Укажите количество.'; return; }
+  if(qty > c.free + 0.5 && !confirm(`У поставщика свободно только ${fmt(c.free).toLocaleString()} кг. Всё равно добавить ${fmt(qty).toLocaleString()} кг?`)) return;
+  const k = ssKey(c.sid, c.wh);
+  const trucks = JSON.parse(JSON.stringify(fcGetPlanTrucks(c.sid, c.wh)));
+  const tot = t=> t.lines.reduce((a,l)=>a+(Number(l.qty)||0),0);
+  const put = (ti, q)=>{ while(ti>=trucks.length) trucks.push({ lines:[] });
+    const ex = trucks[ti].lines.find(l=>l.pid===c.pid); if(ex) ex.qty += q; else trucks[ti].lines.push({ pid:c.pid, qty:q, kind:'manual' }); };
+  const choice = document.getElementById('fcAddTruck').value;
+  const touched = new Set();
+  if(choice==='auto'){
+    let left = qty;
+    for(let i=0; left>0 && i<trucks.length; i++){ const room = c.capKg - tot(trucks[i]); if(room>0){ const q = Math.min(room, left); put(i, q); touched.add(i+1); left -= q; } }
+    while(left>0){ const i = trucks.length; const q = Math.min(c.capKg, left); put(i, q); touched.add(i+1); left -= q; }
+  } else if(choice==='new'){ put(trucks.length, qty); touched.add(trucks.length); }
+  else { put(Number(choice), qty); touched.add(Number(choice)+1); }
+  ssEditStore[k] = { sid:c.sid, wh:c.wh, trucks };
+  if(ssEdit && ssEdit.sid===c.sid && ssEdit.wh===c.wh) ssEdit = ssEditStore[k];
+  try{ localStorage.setItem('ss_plan_edits', JSON.stringify(ssEditStore)); }catch(e){}
+  const sup = suppliers.find(x=>x.id===c.sid);
+  fcCloseAdd();
+  toast(`Добавлено ${fmt(qty).toLocaleString()} кг → ${sup?.name||''} · ${whName(c.wh)}, машина ${[...touched].join(', ')}. Поставки создаются в «Склад поставщика».`);
+  renderForecast();
+  if(document.getElementById('pane-supstock')?.classList.contains('active')) renderSupPlan();
 }
