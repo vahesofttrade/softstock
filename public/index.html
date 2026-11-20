@@ -844,6 +844,10 @@
           <div class="form-row"><label>Предупреждения</label><select id="set-alerts"><option value="true">Включены</option><option value="false">Выключены</option></select></div>
           <div class="form-row"><label>Утренняя сводка</label><select id="set-summary"><option value="true">Включена</option><option value="false">Выключена</option></select></div>
         </div>
+        <div class="pc-grid4">
+          <div class="form-row" style="grid-column:span 2"><label>🚛🚢 Письмо при смене статуса фуры или контейнера</label><select id="set-status-notify"><option value="true">Присылать</option><option value="false">Не присылать</option></select></div>
+          <div class="form-row" style="grid-column:span 2"><label>О моих собственных изменениях (администратора)</label><select id="set-status-self"><option value="true">Тоже присылать</option><option value="false">Только об изменениях других</option></select></div>
+        </div>
         <div class="svc-btns">
           <button class="btn btn-brand" id="svcSaveBtn" onclick="saveAlertSettings()">💾 Сохранить настройки</button>
           <button class="btn btn-ghost notify-btn" onclick="notifyCall('test')">📨 Тестовое письмо</button>

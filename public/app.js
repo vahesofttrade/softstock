@@ -1885,6 +1885,51 @@ async function markArrived(id){
   });
   if(e2){ toast(e2.message, true); }
   toast('Отмечено как получено ✓ +'+fmt(d.quantity).toLocaleString()+' кг на склад');
+  queueArrived([id]);
+  await Promise.all([loadDeliveries(), loadProducts(), loadStockLog()]);
+  renderDeliveries(); renderDashboard(); renderLevels(); renderForecast(); renderOrders();
+}
+
+// ── письмо о смене статуса (фуры / контейнеры) ──
+async function notifyStatus(payload){
+  try{
+    const { data: { session } } = await sb.auth.getSession();
+    fetch('/.netlify/functions/email-alerts', { method:'POST', keepalive:true,
+      headers:{'Content-Type':'application/json', 'Authorization':'Bearer '+(session?.access_token||'')},
+      body: JSON.stringify({ mode:'status', ...payload }) }).catch(()=>{});
+  }catch(e){}
+}
+// полученные позиции копим несколько секунд, чтобы по одной машине ушло одно письмо
+let arrivedQueue = [], arrivedTimer = null;
+function queueArrived(ids){
+  arrivedQueue.push(...ids);
+  clearTimeout(arrivedTimer);
+  arrivedTimer = setTimeout(flushArrived, 15000);
+}
+function flushArrived(){
+  clearTimeout(arrivedTimer); arrivedTimer = null;
+  if(!arrivedQueue.length) return;
+  const ids = [...new Set(arrivedQueue)]; arrivedQueue = [];
+  notifyStatus({ kind:'delivery', ids });
+}
+document.addEventListener('visibilitychange', ()=>{ if(document.visibilityState==='hidden') flushArrived(); });
+window.addEventListener('pagehide', flushArrived);
+
+// вся машина получена одним нажатием
+async function receiveDeliveryGroup(key){
+  const g = delGroupIds[key]; if(!g || !canEdit()) return;
+  const items = deliveries.filter(d=>g.ids.includes(d.id) && d.status==='pending');
+  if(!items.length) return;
+  const kgSum = items.reduce((a,d)=>a+Number(d.quantity||0),0);
+  if(!confirm(`Отметить машину «${g.truck}» полученной: ${items.length} поз., ${fmt(kgSum).toLocaleString()} кг будут добавлены на склад?`)) return;
+  const up = await sb.from('deliveries').update({ status:'arrived', arrived_at:new Date().toISOString() }).in('id', items.map(d=>d.id)).select('id');
+  if(up.error || !up.data?.length){ toast('Не сохранено: '+(up.error?.message||'нет прав'), true); return; }
+  const ok = new Set(up.data.map(x=>x.id));
+  const logs = items.filter(d=>ok.has(d.id)).map(d=>({ product_id:d.product_id, operation:'add', quantity:d.quantity, date:todayISO(), note:'Поставка получена'+(d.plate_no?' · '+d.plate_no:''), user_id:me.id }));
+  const ins = await sb.from('stock_log').insert(logs);
+  if(ins.error) toast(ins.error.message, true);
+  queueArrived([...ok]); flushArrived();
+  toast(`Машина получена ✓ +${fmt(kgSum).toLocaleString()} кг на склад`);
   await Promise.all([loadDeliveries(), loadProducts(), loadStockLog()]);
   renderDeliveries(); renderDashboard(); renderLevels(); renderForecast(); renderOrders();
 }
@@ -2059,6 +2104,7 @@ function renderDeliveries(){
         <div style="display:flex;gap:5px;flex-shrink:0">
           ${pending>0?`<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:#FFFBEB;color:#92400e">${pending} pending</span>`:''}
           ${arrived>0?`<span style="font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;background:var(--brand-light);color:var(--brand-dark)">${arrived} arrived</span>`:''}
+          ${canEdit() && pending>0 ? `<button class="btn btn-ghost btn-sm" style="padding:3px 9px;font-size:11.5px" title="Отметить все позиции машины полученными" onclick="event.stopPropagation();receiveDeliveryGroup('${key}')">✓ Получить всю машину</button>` : ''}
           ${canEdit() ? `<button class="btn-icon" title="Удалить всю машину" onclick="event.stopPropagation();removeDeliveryGroup('${key}')">🗑</button>` : ''}
         </div>
       </div>
@@ -3465,7 +3511,7 @@ async function downloadBackup(){
 
 async function renderService(){
   const isAdmin = myProfile?.role==='admin';
-  ['set-email','set-days-high','set-days-medium','set-alerts','set-summary','svcSaveBtn'].forEach(id=>{ const el = document.getElementById(id); if(el) el.disabled = !isAdmin; });
+  ['set-email','set-days-high','set-days-medium','set-alerts','set-summary','set-status-notify','set-status-self','svcSaveBtn'].forEach(id=>{ const el = document.getElementById(id); if(el) el.disabled = !isAdmin; });
   document.querySelectorAll('#pane-service .notify-btn').forEach(b=>b.disabled = !isAdmin);
   document.getElementById('svcError').textContent = isAdmin ? '' : 'Настройки уведомлений меняет только администратор.';
   const { data, error } = await sb.from('app_settings').select('key,value');
@@ -3476,6 +3522,8 @@ async function renderService(){
   document.getElementById('set-days-medium').value = st.alert_days_medium ?? 7;
   document.getElementById('set-alerts').value  = st.alerts_enabled  === 'false' ? 'false' : 'true';
   document.getElementById('set-summary').value = st.summary_enabled === 'false' ? 'false' : 'true';
+  document.getElementById('set-status-notify').value = st.status_notify_enabled === 'false' ? 'false' : 'true';
+  document.getElementById('set-status-self').value = st.status_notify_self === 'false' ? 'false' : 'true';
 }
 
 async function saveAlertSettings(){
@@ -3491,7 +3539,9 @@ async function saveAlertSettings(){
     {key:'alert_days_high', value:String(hi), updated_at:now}, {key:'alert_days_medium', value:String(md), updated_at:now},
     {key:'alert_email', value:emails.join(', '), updated_at:now},
     {key:'alerts_enabled', value:document.getElementById('set-alerts').value, updated_at:now},
-    {key:'summary_enabled', value:document.getElementById('set-summary').value, updated_at:now}
+    {key:'summary_enabled', value:document.getElementById('set-summary').value, updated_at:now},
+    {key:'status_notify_enabled', value:document.getElementById('set-status-notify').value, updated_at:now},
+    {key:'status_notify_self', value:document.getElementById('set-status-self').value, updated_at:now}
   ];
   const { data, error } = await sb.from('app_settings').upsert(rows, {onConflict:'key'}).select('key');
   if(error){ err.textContent = error.message; return; }
@@ -4672,6 +4722,7 @@ async function shAddEvent(id){
   if(!status && !note){ toast('Выберите статус или напишите заметку', true); return; }
   const ins = await sb.from('shipment_events').insert({ shipment_id:id, at, status: status||null, note, user_name: myProfile?.full_name||'' }).select('id');
   if(ins.error || !ins.data?.length){ toast('Не сохранено: '+(ins.error?.message||'нет прав'), true); return; }
+  if(status && status!==r.status) notifyStatus({ kind:'shipment', event_id: ins.data[0].id });
   if(status && status!==r.status){
     const patch = { status, updated_at:new Date().toISOString() };
     if(status==='delivered') patch.delivered_at = at;
@@ -4757,8 +4808,10 @@ async function shSave(id){
       sid = r.data[0].id;
     }
     if(items.length){ const r = await sb.from('shipment_items').insert(items.map(x=>({ ...x, shipment_id:sid }))); if(r.error) throw r.error; }
-    if(!id || (old && old.status!==rec.status))
-      await sb.from('shipment_events').insert({ shipment_id:sid, at:todayISO(), status:rec.status, note: id?'статус изменён':'создано', user_name: myProfile?.full_name||'' });
+    if(!id || (old && old.status!==rec.status)){
+      const ev = await sb.from('shipment_events').insert({ shipment_id:sid, at:todayISO(), status:rec.status, note: id?'статус изменён':'создано', user_name: myProfile?.full_name||'' }).select('id');
+      if(id && ev.data?.length) notifyStatus({ kind:'shipment', event_id: ev.data[0].id });   // при создании письмо не шлём — только при смене статуса
+    }
     toast('Сохранено ✓');
     await shLoad(true); shOpenView(sid);
   }catch(e){ err.textContent = /shipments|shipment_/.test(e.message||'') && /exist/.test(e.message||'') ? 'Выполните в Supabase скрипт migration_shipments.sql.' : 'Ошибка: '+(e.message||e); }
