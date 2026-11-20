@@ -1906,7 +1906,7 @@ async function removeDelivery(id){
   await loadDeliveries(); renderDeliveries(); renderOrders();
 }
 
-let delFilterState = 'all';
+let delFilterState = 'pending';   // по умолчанию — машины в пути
 let delCollapsed = {};
 
 function setDelFilter(f){
@@ -1916,7 +1916,8 @@ function setDelFilter(f){
 }
 function renderDelFilterBar(){
   const bar = document.getElementById('deliveryFilterBar');
-  const opts = [['all','All'],['pending','Pending'],['arrived','Arrived']];
+  const nP = deliveries.filter(d=>d.status==='pending').length, nA = deliveries.filter(d=>d.status==='arrived').length;
+  const opts = [['pending',`🚚 В пути (${nP})`],['arrived',`Получено (${nA})`],['all',`Все (${deliveries.length})`]];
   bar.innerHTML = opts.map(([k,l])=>`<span class="pill${delFilterState===k?' active':''}" onclick="setDelFilter('${k}')">${l}</span>`).join('');
 }
 
@@ -1955,23 +1956,72 @@ async function removeDeliveryGroup(key){
   else toast('Машина удалена ✓');
   await loadDeliveries(); renderDeliveries();
 }
+function strHash(str){ let h = 5381; for(let i=0;i<str.length;i++) h = ((h<<5)+h + str.charCodeAt(i))|0; return (h>>>0).toString(36); }
+// сводка «Машины в пути»: одна строка на машину, просроченные и ближайшие сверху
+function renderTransitSummary(){
+  const host = document.getElementById('dvTransit'); if(!host) return;
+  const today = todayISO();
+  const g = {};
+  deliveries.filter(d=>d.status==='pending').forEach(d=>{
+    const truck = (d.plate_no||'').trim() || '— без номера —', date = d.expected_date || '';
+    const k = 'k'+strHash(truck+'|'+date);
+    (g[k] = g[k] || { k, truck, date, sup:new Set(), types:{}, kg:0, n:0 });
+    g[k].sup.add(d.suppliers?.name || '—'); g[k].kg += Number(d.quantity||0); g[k].n++;
+    const t = d.products?.type || '—'; g[k].types[t] = (g[k].types[t]||0) + Number(d.quantity||0);
+  });
+  const rows = Object.values(g).sort((a,b)=> (a.date||'9999').localeCompare(b.date||'9999') || a.truck.localeCompare(b.truck));
+  if(!rows.length){ host.innerHTML = `<div class="card dv-transit"><div class="card-title">🚚 Машины в пути</div><div class="empty" style="padding:12px">Сейчас машин в пути нет</div></div>`; return; }
+  const totalKg = rows.reduce((a,r)=>a+r.kg,0), late = rows.filter(r=>r.date && r.date<today).length;
+  const dd = r=>{ if(!r.date) return '<span style="color:var(--text-3)">без даты</span>';
+    const diff = Math.round((new Date(r.date+'T00:00:00') - new Date(today+'T00:00:00'))/86400000);
+    const dt = r.date.slice(8,10)+'.'+r.date.slice(5,7)+'.'+r.date.slice(0,4);
+    if(diff<0) return `<b style="color:var(--red)">${dt}</b><div class="dv-t-sub" style="color:var(--red)">просрочено ${-diff} дн.</div>`;
+    if(diff===0) return `<b style="color:var(--amber)">${dt}</b><div class="dv-t-sub" style="color:var(--amber)">сегодня</div>`;
+    return `${dt}<div class="dv-t-sub">через ${diff} дн.</div>`; };
+  host.innerHTML = `<div class="card dv-transit">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <div class="card-title">🚚 Машины в пути: ${rows.length} · ${fmt(totalKg).toLocaleString()} кг (${(totalKg/1000).toFixed(1).replace('.',',')} т)${late?` · <span style="color:var(--red)">просрочено ${late}</span>`:''}</div>
+      <button class="btn btn-ghost btn-sm" onclick="printTransit()">🖨 Печать списка</button>
+    </div>
+    <div style="overflow-x:auto"><table class="dv-t-table"><thead><tr><th>Машина</th><th>Поставщик</th><th>Ожидается</th><th>Что везёт</th><th class="nosort">Поз.</th><th>Кг</th></tr></thead><tbody>
+    ${rows.map(r=>`<tr style="cursor:pointer" onclick="dvJumpTo('${r.k}')" title="Показать состав машины">
+      <td><b>${escHtml(r.truck)}</b></td><td>${escHtml([...r.sup].join(', '))}</td><td data-sort="${r.date||'9999'}">${dd(r)}</td>
+      <td style="font-size:12px;color:var(--text-2)">${Object.entries(r.types).sort((a,b)=>b[1]-a[1]).map(([t,v])=>`${typeBadgeHtml(t)} ${fmt(v).toLocaleString()}`).join(' ')}</td>
+      <td class="num">${r.n}</td><td class="num" data-sort="${r.kg}"><b>${fmt(r.kg).toLocaleString()}</b></td></tr>`).join('')}
+    </tbody></table></div></div>`;
+}
+function dvJumpTo(k){
+  if(delFilterState==='arrived') setDelFilter('pending');
+  delCollapsed[k] = false;
+  const el = document.getElementById('delf-'+k);
+  if(el){ el.classList.remove('collapsed'); el.scrollIntoView({behavior:'smooth', block:'start'}); el.classList.add('dv-flash'); setTimeout(()=>el.classList.remove('dv-flash'), 1500); }
+}
+function printTransit(){
+  openDeliveryReport();
+  document.getElementById('dvr-kind').value = 'list';
+  document.getElementById('dvr-status').value = 'pending';
+  document.getElementById('dvr-group').value = 'truck';
+  document.getElementById('dvr-from').value = ''; document.getElementById('dvr-to').value = ''; document.getElementById('dvr-sup').value = '';
+  buildDeliveryReport();
+}
 function renderDeliveries(){
   renderDelFilterBar();
+  renderTransitSummary();
   const wrap = document.getElementById('deliveryList');
   let data = deliveries;
   if(delFilterState==='pending') data = data.filter(d=>d.status==='pending');
   else if(delFilterState==='arrived') data = data.filter(d=>d.status==='arrived');
-  if(!data.length){ wrap.innerHTML = '<div class="empty">Нет поставок</div>'; return; }
+  if(!data.length){ wrap.innerHTML = `<div class="empty">${delFilterState==='pending'?'Машин в пути нет':'Нет поставок'}</div>`; return; }
 
   const groups = {};
   data.forEach(d=>{
     const truck = (d.plate_no||'').trim() || '— no truck —';
     const date = d.expected_date || '— no date —';
-    const key = (truck+'|'+date).replace(/[^a-zA-Z0-9]/g,'_') || 'k'+d.id;
+    const key = 'k'+strHash(truck+'|'+date);   // кириллица в номере не должна склеивать разные машины
     if(!groups[key]) groups[key] = {truck, date, items:[]};
     groups[key].items.push(d);
   });
-  const sortMode = document.getElementById('deliverySort')?.value || 'date-desc';
+  const sortMode = document.getElementById('deliverySort')?.value || 'eta';
   const groupQty = g => g.items.reduce((s,x)=>s+Number(x.quantity||0),0);
   const entries = Object.entries(groups).sort((a,b)=>{
     if(sortMode==='qty-desc') return groupQty(b[1]) - groupQty(a[1]);
@@ -1980,6 +2030,11 @@ function renderDeliveries(){
     if(sortMode==='truck') return a[1].truck.localeCompare(b[1].truck);
     const da = a[1].date>'— no date —' ? a[1].date : '';
     const db = b[1].date>'— no date —' ? b[1].date : '';
+    if(sortMode==='eta'){   // сначала машины в пути — ближайшие/просроченные первыми, потом полученные — новые первыми
+      const pa = a[1].items.some(x=>x.status==='pending'), pb = b[1].items.some(x=>x.status==='pending');
+      if(pa!==pb) return pa ? -1 : 1;
+      return pa ? (da||'9999').localeCompare(db||'9999') : db.localeCompare(da);
+    }
     return sortMode==='date-asc' ? da.localeCompare(db) : db.localeCompare(da);
   });
 
@@ -4316,4 +4371,165 @@ function fcConfirmAdd(){
   if(document.getElementById('pane-supstock')?.classList.contains('active')) renderSupPlan();
   const pc = document.getElementById('productCardModal');
   if(pc && !pc.classList.contains('hidden') && pcState.pid===c.pid){ const pp = products.find(x=>x.id===c.pid); if(pp) renderPcSupStock(pp); }
+}
+
+
+// ---------------------------------------------------------------
+// DELIVERIES → отчёт для печати / PDF
+// ---------------------------------------------------------------
+function openDeliveryReport(){
+  let m = document.getElementById('dvRepModal');
+  if(!m){ m = document.createElement('div'); m.id = 'dvRepModal'; document.body.appendChild(m);
+    m.addEventListener('click', e=>{ if(e.target===m) m.style.display='none'; }); }
+  const sups = [...new Set(deliveries.map(d=>d.supplier_id).filter(Boolean))].map(id=>suppliers.find(s=>s.id===id)).filter(Boolean).sort((a,b)=>a.name.localeCompare(b.name));
+  const today = todayISO();
+  m.innerHTML = `<div class="fc-add-box" style="width:500px">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:12px">
+      <div style="font-size:15px;font-weight:700">🖨 Отчёт по поставкам (PDF / печать)</div>
+      <button class="ss-x" style="font-size:16px" onclick="document.getElementById('dvRepModal').style.display='none'">✕</button>
+    </div>
+    <div class="dv-rep-grid">
+      <div class="form-row"><label>Вид отчёта</label><select id="dvr-kind">
+        <option value="list">Список поставок (сводка)</option>
+        <option value="receive">Приёмка по машинам — с колонкой «Факт» и подписями</option></select></div>
+      <div class="form-row"><label>Статус</label><select id="dvr-status">
+        <option value="pending">В пути</option><option value="arrived">Получено</option><option value="all">Все</option></select></div>
+      <div class="form-row"><label>Ожидаемая дата с</label><input type="date" id="dvr-from"></div>
+      <div class="form-row"><label>по</label><input type="date" id="dvr-to"></div>
+      <div class="form-row"><label>Поставщик</label><select id="dvr-sup"><option value="">Все поставщики</option>${sups.map(x=>`<option value="${x.id}">${escHtml(x.name)}</option>`).join('')}</select></div>
+      <div class="form-row"><label>Группировка</label><select id="dvr-group">
+        <option value="truck">По машинам</option><option value="supplier">По поставщикам</option><option value="type">По виду основы</option><option value="date">По датам</option></select></div>
+    </div>
+    <label class="dv-rep-chk"><input type="checkbox" id="dvr-pagebreak"> Каждая машина / группа — с новой страницы</label>
+    <label class="dv-rep-chk"><input type="checkbox" id="dvr-landscape"> Альбомная ориентация</label>
+    <div class="pc-note" id="dvr-info" style="margin:8px 0 0"></div>
+    <div class="svc-btns" style="justify-content:flex-end;margin-top:12px">
+      <button class="btn btn-ghost" onclick="document.getElementById('dvRepModal').style.display='none'">Отмена</button>
+      <button class="btn btn-brand" onclick="buildDeliveryReport()">🖨 Сформировать</button>
+    </div>
+  </div>`;
+  m.style.display = 'flex';
+  const upd = ()=>{ const n = dvReportRows().length; document.getElementById('dvr-info').textContent = n ? `В отчёт попадёт строк: ${n}` : 'Под выбранные условия поставок нет'; };
+  ['dvr-kind','dvr-status','dvr-from','dvr-to','dvr-sup'].forEach(id=>document.getElementById(id).addEventListener('change', ()=>{
+    if(id==='dvr-kind'){ const rc = document.getElementById('dvr-kind').value==='receive';
+      document.getElementById('dvr-group').value = rc ? 'truck' : document.getElementById('dvr-group').value;
+      document.getElementById('dvr-pagebreak').checked = rc; }
+    upd(); }));
+  upd();
+}
+function dvReportRows(){
+  const st = document.getElementById('dvr-status').value, from = document.getElementById('dvr-from').value, to = document.getElementById('dvr-to').value, sup = document.getElementById('dvr-sup').value;
+  return deliveries.filter(d=> (st==='all' || d.status===st)
+    && (!from || (d.expected_date && d.expected_date>=from))
+    && (!to || (d.expected_date && d.expected_date<=to))
+    && (!sup || String(d.supplier_id)===sup));
+}
+function buildDeliveryReport(){
+  const rows = dvReportRows();
+  if(!rows.length){ toast('Нет поставок под выбранные условия', true); return; }
+  const kind = document.getElementById('dvr-kind').value, group = document.getElementById('dvr-group').value;
+  const st = document.getElementById('dvr-status').value, from = document.getElementById('dvr-from').value, to = document.getElementById('dvr-to').value;
+  const supSel = document.getElementById('dvr-sup'); const supName = supSel.value ? supSel.options[supSel.selectedIndex].text : 'все';
+  const pageBreak = document.getElementById('dvr-pagebreak').checked, landscape = document.getElementById('dvr-landscape').checked;
+  const receive = kind==='receive';
+  const P = d=> d.products || products.find(p=>p.id===d.product_id) || {};
+  const ruD = iso=> iso ? iso.slice(8,10)+'.'+iso.slice(5,7)+'.'+iso.slice(0,4) : '—';
+  const kg = v=> Math.round(Number(v)||0).toLocaleString('ru-RU');
+  const today = new Date();
+  const isLate = d=> d.status==='pending' && d.expected_date && d.expected_date < todayISO();
+  // группы
+  const gkey = d=> group==='supplier' ? (d.suppliers?.name || '— без поставщика —')
+    : group==='type' ? (P(d).type || '—')
+    : group==='date' ? (d.expected_date || '— без даты —')
+    : ((d.plate_no||'').trim() || '— без номера —') + '|' + (d.expected_date||'');
+  const groups = {};
+  rows.forEach(d=>{ const k = gkey(d); (groups[k] = groups[k] || []).push(d); });
+  const entries = Object.entries(groups).sort((a,b)=>{
+    if(group==='date') return a[0].localeCompare(b[0]);
+    if(group==='truck'){ const da = a[1][0].expected_date||'9999', db = b[1][0].expected_date||'9999'; return da.localeCompare(db) || a[0].localeCompare(b[0]); }
+    return a[0].localeCompare(b[0]);
+  });
+  entries.forEach(([,items])=> items.sort((x,y)=> productOrderCmp(products.find(p=>p.id===x.product_id), products.find(p=>p.id===y.product_id))));
+  const total = rows.reduce((a,d)=>a+Number(d.quantity||0),0);
+  const trucks = new Set(rows.map(d=>((d.plate_no||'').trim()||'?')+'|'+(d.expected_date||''))).size;
+  const late = rows.filter(isLate).length;
+  // итоги по видам основы
+  const byType = {}; rows.forEach(d=>{ const t = P(d).type||'—'; byType[t] = (byType[t]||0) + Number(d.quantity||0); });
+
+  const groupTitle = (k, items)=>{
+    const d0 = items[0];
+    if(group==='truck') return `Машина: ${escHtml(k.split('|')[0])}<span class="gt-sub">${escHtml(d0.suppliers?.name||'—')} · ожидается ${ruD(d0.expected_date)}${items.some(isLate)?' · <b class="late">просрочено</b>':''}</span>`;
+    if(group==='date') return `Ожидается ${k.startsWith('—')?k:ruD(k)}`;
+    return escHtml(k);
+  };
+  const head = `<tr><th class="n">№</th>${group!=='type'?'<th>Вид основы</th>':''}<th>Товар</th><th>Ширина, см</th><th>Слои</th><th>GSM</th>
+    ${group!=='supplier'?'<th>Поставщик</th>':''}${group!=='truck'?'<th>Машина</th>':''}${group!=='truck'&&group!=='date'?'<th>Ожидается</th>':''}
+    <th class="r">Кол-во, кг</th>${receive?'<th class="r fact">Факт, кг</th><th class="fact">Примечание</th>':'<th>Статус</th>'}</tr>`;
+  const body = entries.map(([k, items])=>{
+    const sum = items.reduce((a,d)=>a+Number(d.quantity||0),0);
+    const lines = items.map((d,i)=>{ const p = P(d);
+      return `<tr><td class="n">${i+1}</td>${group!=='type'?`<td>${escHtml(p.type||'—')}</td>`:''}<td>${escHtml(p.name||'—')}</td>
+        <td class="c">${p.width_cm??'—'}</td><td class="c">${p.ply??'—'}</td><td class="c">${p.gsm??'—'}</td>
+        ${group!=='supplier'?`<td>${escHtml(d.suppliers?.name||'—')}</td>`:''}${group!=='truck'?`<td>${escHtml(d.plate_no||'—')}</td>`:''}
+        ${group!=='truck'&&group!=='date'?`<td class="c${isLate(d)?' late':''}">${ruD(d.expected_date)}</td>`:''}
+        <td class="r b">${kg(d.quantity)}</td>${receive?'<td class="fact"></td><td class="fact"></td>':`<td class="${isLate(d)?'late':''}">${d.status==='arrived'?'получено '+(d.arrived_at?ruD(String(d.arrived_at).slice(0,10)):''):(isLate(d)?'просрочено':'в пути')}</td>`}</tr>`; }).join('');
+    const span = head.match(/<th/g).length;
+    const sumSpan = span - (receive?3:2);
+    return `<section class="grp${pageBreak?' pb':''}">
+      <h2>${groupTitle(k, items)}</h2>
+      <table><thead>${head}</thead><tbody>${lines}</tbody>
+      <tfoot><tr><td colspan="${sumSpan}" class="r">Итого${group==='truck'?' по машине':''}: ${items.length} поз.</td><td class="r b">${kg(sum)}</td>${receive?'<td class="fact"></td><td class="fact"></td>':'<td></td>'}</tr></tfoot></table>
+      ${receive && group==='truck' ? `<div class="sign"><div>Принял: ______________________ / ______________ /</div><div>Водитель: ______________________ / ______________ /</div><div>Дата и время приёмки: ____.____.________ ____:____</div></div>` : ''}
+    </section>`;
+  }).join('');
+  const statusTxt = ({pending:'в пути', arrived:'получено', all:'все'})[st];
+  const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Поставки ${ruD(todayISO())}</title>
+<style>
+  @page{ size:A4 ${landscape?'landscape':'portrait'}; margin:12mm 10mm 14mm }
+  *{ box-sizing:border-box }
+  body{ font-family:Arial,Helvetica,sans-serif; color:#111; font-size:10.5pt; margin:0 }
+  .bar{ position:sticky; top:0; background:#0F6E56; color:#fff; padding:10px 16px; display:flex; gap:10px; align-items:center; justify-content:space-between }
+  .bar button{ background:#fff; color:#0F6E56; border:0; border-radius:6px; padding:8px 14px; font-weight:700; cursor:pointer; font-size:13px }
+  .doc{ padding:14px 18px; max-width:${landscape?'1120px':'800px'}; margin:0 auto }
+  h1{ font-size:16pt; margin:0 0 2px } .muted{ color:#555; font-size:9.5pt }
+  .meta{ display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #0F6E56; padding-bottom:6px; margin-bottom:10px }
+  .kpis{ display:flex; gap:8px; margin:8px 0 12px; flex-wrap:wrap }
+  .kpi{ border:1px solid #ccc; border-radius:4px; padding:5px 10px } .kpi b{ display:block; font-size:12pt }
+  .types{ font-size:9.5pt; color:#333; margin:-4px 0 10px }
+  h2{ font-size:11.5pt; margin:14px 0 4px; padding:5px 8px; background:#E7F3EE; border-left:4px solid #0F6E56 }
+  .gt-sub{ font-weight:400; font-size:9.5pt; color:#333; margin-left:10px }
+  table{ width:100%; border-collapse:collapse; font-size:9.5pt }
+  th,td{ border:1px solid #999; padding:3px 5px; vertical-align:top }
+  th{ background:#f2f2f2; font-size:8.5pt; text-align:left } th.r,td.r{ text-align:right } td.c{ text-align:center } td.n,th.n{ width:22px; text-align:center }
+  td.b{ font-weight:700 } tfoot td{ background:#fafafa; font-weight:700 }
+  td.fact,th.fact{ min-width:70px } th.fact{ background:#fff8e1 }
+  .late{ color:#B42318 } b.late{ color:#B42318 }
+  .sign{ display:flex; flex-direction:column; gap:10px; margin:12px 0 4px; font-size:10pt }
+  .grp{ break-inside:avoid-page } .pb{ break-after:page } section.grp:last-of-type{ break-after:auto }
+  thead{ display:table-header-group } tr{ break-inside:avoid }
+  .foot{ margin-top:14px; font-size:8.5pt; color:#666; border-top:1px solid #ccc; padding-top:4px }
+  @media print{ .bar{ display:none } .doc{ padding:0; max-width:none } h2{ -webkit-print-color-adjust:exact; print-color-adjust:exact } th{ -webkit-print-color-adjust:exact; print-color-adjust:exact } }
+</style></head><body>
+<div class="bar"><span>Отчёт готов. Для PDF выберите в окне печати «Сохранить как PDF».</span><span><button onclick="window.print()">🖨 Печать / PDF</button> <button onclick="window.close()">Закрыть</button></span></div>
+<div class="doc">
+  <div class="meta"><div><h1>${receive?'Акт приёмки поставок':'Поставки'}</h1>
+    <div class="muted">Статус: ${statusTxt} · период: ${from||to ? (from?ruD(from):'…')+' — '+(to?ruD(to):'…') : 'все даты'} · поставщик: ${escHtml(supName)}</div></div>
+    <div class="muted" style="text-align:right">SoftStock<br>${today.toLocaleDateString('ru-RU')} ${today.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'})}<br>${escHtml(myProfile?.full_name||'')}</div></div>
+  <div class="kpis">
+    <div class="kpi">Всего, кг<b>${kg(total)}</b></div>
+    <div class="kpi">Тонн<b>${(total/1000).toFixed(2).replace('.',',')}</b></div>
+    <div class="kpi">Машин<b>${trucks}</b></div>
+    <div class="kpi">Позиций<b>${rows.length}</b></div>
+    ${late?`<div class="kpi late">Просрочено<b>${late}</b></div>`:''}
+  </div>
+  <div class="types">${Object.entries(byType).sort((a,b)=>b[1]-a[1]).map(([t,v])=>`${escHtml(t)}: <b>${kg(v)} кг</b>`).join(' · ')}</div>
+  ${body}
+  <div class="foot">Сформировано в SoftStock · ${today.toLocaleString('ru-RU')}</div>
+</div>
+<script>setTimeout(function(){ window.print(); }, 400);<\/script>
+</body></html>`;
+  const w = window.open('', '_blank');
+  if(!w){ toast('Браузер заблокировал новое окно — разрешите всплывающие окна для этого сайта', true); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+  document.getElementById('dvRepModal').style.display = 'none';
 }
