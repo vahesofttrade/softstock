@@ -110,6 +110,7 @@ function showPane(name){
   if(window.innerWidth<=820) toggleSidebar(false);
   if(name==='audit') loadAudit(true);
   if(name==='supstock') renderSupStock(true);
+  if(name==='shipments') shLoad(true);
   if(name==='service') renderService();
 }
 
@@ -4532,4 +4533,268 @@ function buildDeliveryReport(){
   if(!w){ toast('Браузер заблокировал новое окно — разрешите всплывающие окна для этого сайта', true); return; }
   w.document.open(); w.document.write(html); w.document.close();
   document.getElementById('dvRepModal').style.display = 'none';
+}
+
+
+// ---------------------------------------------------------------
+// КОНТЕЙНЕРЫ — отдельный учёт готовой продукции / оборудования.
+// Свои таблицы (shipments, shipment_items, shipment_events); со складом сырья не связан.
+// ---------------------------------------------------------------
+const SH_STATUS = [
+  ['ordered','Заказано','#64748b'], ['production','Производство','#7c3aed'], ['shipped','В пути','#2563eb'],
+  ['port','В порту','#0891b2'], ['customs','Таможня','#d97706'], ['delivered','Доставлено','#0F6E56'], ['cancelled','Отменено','#9ca3af']
+];
+const SH_STEPS = ['ordered','production','shipped','port','customs','delivered'];
+const SH_CAT  = { finished:'Готовая продукция', equipment:'Оборудование / станки', parts:'Запчасти', other:'Прочее' };
+const SH_KIND = { container:'Контейнер', truck:'Авто', air:'Авиа', rail:'Ж/д', other:'Другое' };
+const SH_ACTIVE = ['ordered','production','shipped','port','customs'];
+let shRows = [], shItems = [], shEvents = [], shErr = '', shFilter = 'active', shLoaded = false;
+const shSt = k=> SH_STATUS.find(x=>x[0]===k) || [k,k,'#64748b'];
+const shRu = iso=> iso ? iso.slice(8,10)+'.'+iso.slice(5,7)+'.'+iso.slice(0,4) : '—';
+
+async function shLoad(force){
+  if(shLoaded && !force){ shRender(); return; }
+  const [a,b,c] = await Promise.all([
+    sb.from('shipments').select('*').order('id',{ascending:false}),
+    sb.from('shipment_items').select('*').order('id'),
+    sb.from('shipment_events').select('*').order('at').order('id')
+  ]);
+  shErr = a.error ? (/shipments/.test(a.error.message) ? 'Раздел ещё не включён — выполните в Supabase скрипт migration_shipments.sql.' : a.error.message) : '';
+  shRows = a.data||[]; shItems = b.data||[]; shEvents = c.data||[]; shLoaded = !a.error;
+  shRender();
+}
+function shTargetDate(r){ return r.eta_final || r.eta || null; }
+function shIsLate(r){ const d = shTargetDate(r); return SH_ACTIVE.includes(r.status) && d && d < todayISO(); }
+function shDaysTo(iso){ return Math.round((new Date(iso+'T00:00:00') - new Date(todayISO()+'T00:00:00'))/86400000); }
+
+function shRender(){
+  const tb = document.querySelector('#shTable tbody'); if(!tb) return;
+  // KPI
+  const active = shRows.filter(r=>SH_ACTIVE.includes(r.status));
+  const moving = shRows.filter(r=>['shipped','port','customs'].includes(r.status));
+  const soon = active.filter(r=>{ const d = shTargetDate(r); return d && d>=todayISO() && shDaysTo(d)<=14; });
+  const late = shRows.filter(shIsLate);
+  const kpi = (l,v,sub,col,f)=>`<div class="card kpi-card" style="cursor:pointer;padding:12px 14px" onclick="shSetFilter('${f}')"><div class="pc-note" style="margin:0;text-transform:uppercase;font-size:10.5px;letter-spacing:.04em">${l}</div><div style="font-size:22px;font-weight:700;color:${col||'inherit'}">${v}</div><div class="pc-note" style="margin:0">${sub}</div></div>`;
+  document.getElementById('shKpis').innerHTML =
+    kpi('Активные', active.length, 'всё, что ещё не доставлено', '', 'active') +
+    kpi('В пути / порт / таможня', moving.length, 'уже отгружено', '#2563eb', 'moving') +
+    kpi('Прибудут за 14 дней', soon.length, 'по плановой дате', '#0891b2', 'soon') +
+    kpi('Просрочено', late.length, 'плановая дата прошла', late.length?'var(--red)':'', 'late');
+  // фильтр по статусу
+  const cnt = k=> shRows.filter(r=>r.status===k).length;
+  const pills = [['active',`Активные (${active.length})`], ...SH_STATUS.map(([k,l])=>[k,`${l} (${cnt(k)})`]), ['all',`Все (${shRows.length})`]];
+  document.getElementById('shStatusBar').innerHTML = pills.map(([k,l])=>`<span class="pill${shFilter===k?' active':''}" onclick="shSetFilter('${k}')">${l}</span>`).join('');
+  if(shErr){ tb.innerHTML = `<tr><td colspan="6" class="empty">${escHtml(shErr)}</td></tr>`; return; }
+  const cat = document.getElementById('shCat').value, q = (document.getElementById('shSearch').value||'').toLowerCase().trim();
+  let rows = shRows.filter(r=>{
+    if(shFilter==='active') return SH_ACTIVE.includes(r.status);
+    if(shFilter==='moving') return ['shipped','port','customs'].includes(r.status);
+    if(shFilter==='soon') return soon.includes(r);
+    if(shFilter==='late') return shIsLate(r);
+    if(shFilter==='all') return true;
+    return r.status===shFilter;
+  });
+  if(cat) rows = rows.filter(r=>r.category===cat);
+  if(q) rows = rows.filter(r=> [r.ref_no,r.title,r.sender,r.origin,r.destination,r.carrier,r.vessel,r.bl_no,r.notes, ...shItems.filter(i=>i.shipment_id===r.id).map(i=>i.name)].join(' ').toLowerCase().includes(q));
+  rows.sort((a,b)=> (shIsLate(b)-shIsLate(a)) || (shTargetDate(a)||'9999').localeCompare(shTargetDate(b)||'9999') || b.id-a.id);
+  if(!rows.length){ tb.innerHTML = `<tr><td colspan="6" class="empty">${shRows.length ? 'Ничего не найдено' : 'Пока нет отправок — нажмите «＋ Новая отправка»'}</td></tr>`; return; }
+  tb.innerHTML = rows.map(r=>{
+    const st = shSt(r.status), items = shItems.filter(i=>i.shipment_id===r.id), ev = shEvents.filter(e=>e.shipment_id===r.id).slice(-1)[0];
+    const d = shTargetDate(r), dd = d ? shDaysTo(d) : null;
+    const stepIdx = SH_STEPS.indexOf(r.status);
+    return `<tr style="cursor:pointer" onclick="shOpenView(${r.id})">
+      <td><b>${escHtml(r.ref_no||'—')}</b><div class="pc-note" style="margin:0">${SH_KIND[r.kind]||''}${r.container_type?' '+escHtml(r.container_type):''}</div></td>
+      <td style="max-width:300px"><span class="sh-cat sh-cat-${r.category}">${SH_CAT[r.category]||''}</span> <b>${escHtml(r.title||'')}</b>
+        <div class="pc-note" style="margin:2px 0 0">${items.slice(0,3).map(i=>escHtml(i.name)+(i.qty!=null?' — '+fmt(i.qty).toLocaleString()+' '+escHtml(i.unit||''):'')).join('; ')}${items.length>3?` … ещё ${items.length-3}`:''}</div></td>
+      <td>${escHtml(r.sender||'—')}<div class="pc-note" style="margin:0">${escHtml(r.origin||'?')} → ${escHtml(r.destination||'?')}</div></td>
+      <td data-sort="${SH_STEPS.indexOf(r.status)}"><span class="sh-badge" style="--c:${st[2]}">${st[1]}</span>
+        ${stepIdx>=0?`<div class="sh-steps">${SH_STEPS.map((k,i)=>`<i class="${i<=stepIdx?'on':''}" style="${i<=stepIdx?'background:'+st[2]:''}"></i>`).join('')}</div>`:''}</td>
+      <td data-sort="${d||'9999'}">${r.status==='delivered' ? `<span style="color:var(--brand)">${shRu(r.delivered_at||d)}</span><div class="pc-note" style="margin:0">доставлено</div>`
+        : d ? `<b style="${dd<0?'color:var(--red)':dd<=3?'color:var(--amber)':''}">${shRu(d)}</b><div class="pc-note" style="margin:0;${dd<0?'color:var(--red)':''}">${dd<0?'просрочено '+(-dd)+' дн.':dd===0?'сегодня':'через '+dd+' дн.'}${r.eta_final&&r.eta&&r.eta!==r.eta_final?' · порт '+shRu(r.eta):''}</div>` : '<span class="pc-note">не указано</span>'}</td>
+      <td style="font-size:12px;color:var(--text-2);max-width:220px">${ev?`${shRu(ev.at)} · ${escHtml(ev.note || shSt(ev.status)[1])}`:''}</td>
+    </tr>`;
+  }).join('');
+}
+function shSetFilter(f){ shFilter = f; shRender(); }
+
+// ── модальные окна ──
+function shModal(html, wide){
+  let m = document.getElementById('shModal');
+  if(!m){ m = document.createElement('div'); m.id = 'shModal'; document.body.appendChild(m);
+    m.addEventListener('click', e=>{ if(e.target===m) shCloseModal(); }); }
+  m.innerHTML = `<div class="sh-box${wide?' wide':''}">${html}</div>`;
+  m.style.display = 'flex';
+}
+function shCloseModal(){ const m = document.getElementById('shModal'); if(m) m.style.display = 'none'; }
+
+function shOpenView(id){
+  const r = shRows.find(x=>x.id===id); if(!r) return;
+  const st = shSt(r.status), items = shItems.filter(i=>i.shipment_id===id), ev = shEvents.filter(e=>e.shipment_id===id);
+  const stepIdx = SH_STEPS.indexOf(r.status);
+  const f = (l,v)=> v ? `<div><span>${l}</span><b>${v}</b></div>` : '';
+  shModal(`
+    <div class="sh-head"><div><div style="font-size:17px;font-weight:700">${escHtml(r.ref_no||'Без номера')} <span class="sh-badge" style="--c:${st[2]}">${st[1]}</span></div>
+      <div class="pc-note" style="margin:2px 0 0">${SH_KIND[r.kind]||''}${r.container_type?' '+escHtml(r.container_type):''} · <span class="sh-cat sh-cat-${r.category}">${SH_CAT[r.category]}</span> ${escHtml(r.title||'')}</div></div>
+      <button class="ss-x" style="font-size:16px" onclick="shCloseModal()">✕</button></div>
+    <div class="sh-stepper">${SH_STEPS.map((k,i)=>{ const s2 = shSt(k); const done = stepIdx>=0 && i<=stepIdx;
+      const e = [...ev].reverse().find(x=>x.status===k);
+      return `<div class="${done?'done':''}" style="${done?'--c:'+st[2]:''}"><i></i><span>${s2[1]}</span><small>${e?shRu(e.at):''}</small></div>`; }).join('')}</div>
+    ${r.status==='cancelled'?'<div class="pc-note" style="color:var(--red)">Отправка отменена</div>':''}
+    <div class="sh-info">
+      ${f('Отправитель', escHtml(r.sender))}${f('Маршрут', escHtml((r.origin||'?')+' → '+(r.destination||'?')))}
+      ${f('Перевозчик / линия', escHtml(r.carrier))}${f('Судно / рейс', escHtml(r.vessel))}${f('Коносамент / CMR', escHtml(r.bl_no))}
+      ${f('Дата заказа', r.order_date?shRu(r.order_date):'')}${f('Отправка (ETD)', r.etd?shRu(r.etd):'')}${f('Прибытие в порт (ETA)', r.eta?shRu(r.eta):'')}
+      ${f('Доставка на склад', r.eta_final?shRu(r.eta_final):'')}${f('Доставлено', r.delivered_at?shRu(r.delivered_at):'')}
+      ${f('Стоимость', r.value!=null?fmt(r.value).toLocaleString()+' '+escHtml(r.currency||''):'')}
+    </div>
+    ${r.notes?`<div class="sh-notes">${escHtml(r.notes)}</div>`:''}
+    <div class="sh-sec">Состав (${items.length})</div>
+    ${items.length?`<table class="sh-items"><thead><tr><th>Наименование</th><th>Кол-во</th><th>Примечание</th></tr></thead><tbody>
+      ${items.map(i=>`<tr><td>${escHtml(i.name)}</td><td class="num" style="white-space:nowrap">${i.qty!=null?fmt(i.qty).toLocaleString()+' '+escHtml(i.unit||''):'—'}</td><td style="color:var(--text-2)">${escHtml(i.note||'')}</td></tr>`).join('')}</tbody></table>`:'<div class="pc-note">Позиции не указаны</div>'}
+    <div class="sh-sec">История</div>
+    <div class="sh-timeline">${ev.length ? [...ev].reverse().map(e=>`<div><b>${shRu(e.at)}</b>${e.status?` <span class="sh-badge" style="--c:${shSt(e.status)[2]}">${shSt(e.status)[1]}</span>`:''} ${escHtml(e.note||'')} <span class="pc-note" style="display:inline">· ${escHtml(e.user_name||'')}</span></div>`).join('') : '<div class="pc-note">Записей пока нет</div>'}</div>
+    ${canEdit()?`<div class="sh-upd">
+      <select id="shUpdStatus"><option value="">— статус без изменений —</option>${SH_STATUS.map(([k,l])=>`<option value="${k}" ${k===SH_STEPS[stepIdx+1]?'selected':''}>${l}</option>`).join('')}</select>
+      <input type="date" id="shUpdDate" value="${todayISO()}">
+      <input type="text" id="shUpdNote" placeholder="Заметка: «прибыл в Поти», «выпущен с таможни»…">
+      <button class="btn btn-brand btn-sm" onclick="shAddEvent(${id})">Записать</button>
+    </div>
+    <div class="svc-btns" style="justify-content:space-between;margin-top:12px">
+      <button class="btn btn-ghost btn-sm" style="color:var(--red)" onclick="shDelete(${id})">🗑 Удалить</button>
+      <button class="btn btn-ghost btn-sm" onclick="shOpenEdit(${id})">✎ Редактировать</button>
+    </div>`:''}
+  `, true);
+}
+
+async function shAddEvent(id){
+  const r = shRows.find(x=>x.id===id); if(!r) return;
+  const status = document.getElementById('shUpdStatus').value, at = document.getElementById('shUpdDate').value || todayISO(), note = document.getElementById('shUpdNote').value.trim();
+  if(!status && !note){ toast('Выберите статус или напишите заметку', true); return; }
+  const ins = await sb.from('shipment_events').insert({ shipment_id:id, at, status: status||null, note, user_name: myProfile?.full_name||'' }).select('id');
+  if(ins.error || !ins.data?.length){ toast('Не сохранено: '+(ins.error?.message||'нет прав'), true); return; }
+  if(status && status!==r.status){
+    const patch = { status, updated_at:new Date().toISOString() };
+    if(status==='delivered') patch.delivered_at = at;
+    if(status==='shipped' && !r.etd) patch.etd = at;
+    const up = await sb.from('shipments').update(patch).eq('id', id).select('id');
+    if(up.error){ toast('Ошибка: '+up.error.message, true); return; }
+  }
+  toast('Записано ✓');
+  await shLoad(true); shOpenView(id);
+}
+
+function shOpenEdit(id){
+  const r = id ? shRows.find(x=>x.id===id) : { kind:'container', category:'equipment', status:'ordered', currency:'USD', order_date: todayISO() };
+  const items = id ? shItems.filter(i=>i.shipment_id===id) : [];
+  const v = k=> escHtml(r[k]??'');
+  const opt = (obj, cur)=> Object.entries(obj).map(([k,l])=>`<option value="${k}" ${k===cur?'selected':''}>${l}</option>`).join('');
+  shModal(`
+    <div class="sh-head"><div style="font-size:16px;font-weight:700">${id?'Редактировать отправку':'Новая отправка'}</div><button class="ss-x" style="font-size:16px" onclick="${id?`shOpenView(${id})`:'shCloseModal()'}">✕</button></div>
+    <div class="sh-form">
+      <div class="form-row"><label>Номер контейнера / отправки</label><input id="shf-ref_no" value="${v('ref_no')}" placeholder="MSCU1234567"></div>
+      <div class="form-row"><label>Вид</label><select id="shf-kind">${opt(SH_KIND, r.kind)}</select></div>
+      <div class="form-row"><label>Тип контейнера</label><input id="shf-container_type" value="${v('container_type')}" placeholder="40'HC"></div>
+      <div class="form-row"><label>Категория</label><select id="shf-category">${opt(SH_CAT, r.category)}</select></div>
+      <div class="form-row sh-span2"><label>Что везём (коротко)</label><input id="shf-title" value="${v('title')}" placeholder="Линия для салфеток V-fold"></div>
+      <div class="form-row"><label>Статус</label><select id="shf-status">${SH_STATUS.map(([k,l])=>`<option value="${k}" ${k===r.status?'selected':''}>${l}</option>`).join('')}</select></div>
+      <div class="form-row sh-span2"><label>Отправитель / завод</label><input id="shf-sender" value="${v('sender')}"></div>
+      <div class="form-row"><label>Откуда</label><input id="shf-origin" value="${v('origin')}" placeholder="Шанхай, Китай"></div>
+      <div class="form-row"><label>Куда</label><input id="shf-destination" value="${v('destination')}" placeholder="Ереван, склад"></div>
+      <div class="form-row"><label>Перевозчик / линия</label><input id="shf-carrier" value="${v('carrier')}" placeholder="MSC"></div>
+      <div class="form-row"><label>Судно / рейс</label><input id="shf-vessel" value="${v('vessel')}"></div>
+      <div class="form-row"><label>Коносамент / CMR / AWB</label><input id="shf-bl_no" value="${v('bl_no')}"></div>
+      <div class="form-row"><label>Дата заказа</label><input type="date" id="shf-order_date" value="${v('order_date')}"></div>
+      <div class="form-row"><label>Отправка (ETD)</label><input type="date" id="shf-etd" value="${v('etd')}"></div>
+      <div class="form-row"><label>Прибытие в порт (ETA)</label><input type="date" id="shf-eta" value="${v('eta')}"></div>
+      <div class="form-row"><label>Доставка на склад</label><input type="date" id="shf-eta_final" value="${v('eta_final')}"></div>
+      <div class="form-row"><label>Стоимость</label><div style="display:flex;gap:6px"><input type="number" id="shf-value" value="${v('value')}" min="0" step="0.01"><select id="shf-currency" style="width:84px">${['USD','EUR','CNY','RUB','AMD'].map(c=>`<option ${c===r.currency?'selected':''}>${c}</option>`).join('')}</select></div></div>
+      <div class="form-row sh-span3"><label>Заметки</label><textarea id="shf-notes" rows="2">${v('notes')}</textarea></div>
+    </div>
+    <div class="sh-sec">Состав</div>
+    <div id="shItemsEd">${items.map(i=>shItemRow(i)).join('')}</div>
+    <button class="btn btn-ghost btn-sm" onclick="document.getElementById('shItemsEd').insertAdjacentHTML('beforeend', shItemRow({unit:'шт'}))">＋ Позиция</button>
+    <div class="auth-error" id="shfErr"></div>
+    <div class="svc-btns" style="justify-content:flex-end;margin-top:12px">
+      <button class="btn btn-ghost" onclick="${id?`shOpenView(${id})`:'shCloseModal()'}">Отмена</button>
+      <button class="btn btn-brand" id="shfSave" onclick="shSave(${id||0})">💾 Сохранить</button>
+    </div>`, true);
+  if(!id) document.getElementById('shItemsEd').insertAdjacentHTML('beforeend', shItemRow({unit:'шт'}));
+}
+function shItemRow(i){
+  const units = ['шт','комплект','паллет','коробка','рулон','кг','т','м³'];
+  return `<div class="sh-item-ed" data-id="${i.id||''}">
+    <input class="it-name" placeholder="Наименование" value="${escHtml(i.name||'')}">
+    <input class="it-qty" type="number" min="0" step="any" placeholder="Кол-во" value="${i.qty??''}">
+    <select class="it-unit">${units.map(u=>`<option ${u===(i.unit||'шт')?'selected':''}>${u}</option>`).join('')}${i.unit && !units.includes(i.unit)?`<option selected>${escHtml(i.unit)}</option>`:''}</select>
+    <input class="it-note" placeholder="Примечание" value="${escHtml(i.note||'')}">
+    <button class="ss-x" title="Убрать" onclick="this.parentElement.remove()">✕</button>
+  </div>`;
+}
+async function shSave(id){
+  const err = document.getElementById('shfErr'); err.textContent = '';
+  const g = k=> document.getElementById('shf-'+k).value;
+  const rec = {};
+  ['ref_no','kind','container_type','category','title','status','sender','origin','destination','carrier','vessel','bl_no','currency','notes'].forEach(k=> rec[k] = g(k).trim());
+  ['order_date','etd','eta','eta_final'].forEach(k=> rec[k] = g(k) || null);
+  rec.value = g('value')==='' ? null : Number(g('value'));
+  if(!rec.ref_no && !rec.title){ err.textContent = 'Укажите номер или что везём.'; return; }
+  const items = [...document.querySelectorAll('#shItemsEd .sh-item-ed')].map(el=>({
+    name: el.querySelector('.it-name').value.trim(), qty: el.querySelector('.it-qty').value===''?null:Number(el.querySelector('.it-qty').value),
+    unit: el.querySelector('.it-unit').value, note: el.querySelector('.it-note').value.trim() })).filter(x=>x.name);
+  const btn = document.getElementById('shfSave'); btn.disabled = true;
+  try{
+    const old = id ? shRows.find(x=>x.id===id) : null;
+    rec.updated_at = new Date().toISOString();
+    if(rec.status==='delivered' && !(old && old.delivered_at)) rec.delivered_at = todayISO();
+    let sid = id;
+    if(id){
+      const r = await sb.from('shipments').update(rec).eq('id', id).select('id');
+      if(r.error) throw r.error; if(!r.data?.length) throw new Error('нет прав на изменение');
+      const d = await sb.from('shipment_items').delete().eq('shipment_id', id); if(d.error) throw d.error;
+    } else {
+      const r = await sb.from('shipments').insert(rec).select('id');
+      if(r.error) throw r.error; if(!r.data?.length) throw new Error('нет прав');
+      sid = r.data[0].id;
+    }
+    if(items.length){ const r = await sb.from('shipment_items').insert(items.map(x=>({ ...x, shipment_id:sid }))); if(r.error) throw r.error; }
+    if(!id || (old && old.status!==rec.status))
+      await sb.from('shipment_events').insert({ shipment_id:sid, at:todayISO(), status:rec.status, note: id?'статус изменён':'создано', user_name: myProfile?.full_name||'' });
+    toast('Сохранено ✓');
+    await shLoad(true); shOpenView(sid);
+  }catch(e){ err.textContent = /shipments|shipment_/.test(e.message||'') && /exist/.test(e.message||'') ? 'Выполните в Supabase скрипт migration_shipments.sql.' : 'Ошибка: '+(e.message||e); }
+  finally{ btn.disabled = false; }
+}
+async function shDelete(id){
+  const r = shRows.find(x=>x.id===id);
+  if(!confirm(`Удалить отправку «${r?.ref_no||r?.title||id}» вместе с составом и историей?`)) return;
+  const d = await sb.from('shipments').delete().eq('id', id).select('id');
+  if(d.error || !d.data?.length){ toast('Не удалено: '+(d.error?.message||'нет прав'), true); return; }
+  toast('Удалено ✓'); shCloseModal(); shLoad(true);
+}
+
+function shPrint(){
+  const rows = [...document.querySelectorAll('#shTable tbody tr[onclick]')].map(tr=> shRows.find(x=>x.id===Number(tr.getAttribute('onclick').match(/\d+/)[0]))).filter(Boolean);
+  if(!rows.length){ toast('Нет строк для печати', true); return; }
+  const flt = document.querySelector('#shStatusBar .pill.active')?.textContent || '';
+  const today = new Date();
+  const body = rows.map(r=>{ const items = shItems.filter(i=>i.shipment_id===r.id), d = shTargetDate(r);
+    return `<tr><td><b>${escHtml(r.ref_no||'—')}</b><br><small>${SH_KIND[r.kind]||''} ${escHtml(r.container_type||'')}</small></td>
+      <td><b>${escHtml(r.title||'')}</b><br><small>${SH_CAT[r.category]}</small>${items.length?'<ul>'+items.map(i=>`<li>${escHtml(i.name)}${i.qty!=null?' — '+fmt(i.qty).toLocaleString()+' '+escHtml(i.unit||''):''}</li>`).join('')+'</ul>':''}</td>
+      <td>${escHtml(r.sender||'—')}<br><small>${escHtml(r.origin||'?')} → ${escHtml(r.destination||'?')}</small>${r.carrier||r.vessel?`<br><small>${escHtml([r.carrier,r.vessel].filter(Boolean).join(' · '))}</small>`:''}${r.bl_no?`<br><small>B/L ${escHtml(r.bl_no)}</small>`:''}</td>
+      <td>${shSt(r.status)[1]}</td>
+      <td class="${shIsLate(r)?'late':''}">${r.etd?'ETD '+shRu(r.etd)+'<br>':''}${r.eta?'ETA '+shRu(r.eta)+'<br>':''}${r.eta_final?'склад '+shRu(r.eta_final):''}${r.status==='delivered'?'<br>доставлено '+shRu(r.delivered_at):''}${shIsLate(r)?'<br><b>просрочено</b>':''}</td></tr>`; }).join('');
+  const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Контейнеры ${today.toLocaleDateString('ru-RU')}</title><style>
+    @page{ size:A4 landscape; margin:12mm 10mm } body{ font-family:Arial,Helvetica,sans-serif; font-size:10pt; color:#111; margin:0 }
+    .bar{ background:#0F6E56; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center } .bar button{ background:#fff; color:#0F6E56; border:0; border-radius:6px; padding:8px 14px; font-weight:700; cursor:pointer }
+    .doc{ padding:14px 18px } h1{ font-size:16pt; margin:0 } .muted{ color:#555; font-size:9.5pt; margin-bottom:10px }
+    table{ width:100%; border-collapse:collapse } th,td{ border:1px solid #999; padding:4px 6px; vertical-align:top; text-align:left } th{ background:#f2f2f2; font-size:9pt }
+    small{ color:#555 } ul{ margin:3px 0 0 16px; padding:0 } .late{ color:#B42318 } tr{ break-inside:avoid } thead{ display:table-header-group }
+    @media print{ .bar{ display:none } .doc{ padding:0 } th{ -webkit-print-color-adjust:exact; print-color-adjust:exact } }
+  </style></head><body><div class="bar"><span>Для PDF выберите «Сохранить как PDF».</span><span><button onclick="window.print()">🖨 Печать / PDF</button> <button onclick="window.close()">Закрыть</button></span></div>
+  <div class="doc"><h1>Контейнеры и отправки</h1><div class="muted">${escHtml(flt)} · ${rows.length} шт. · ${today.toLocaleString('ru-RU')} · ${escHtml(myProfile?.full_name||'')}</div>
+  <table><thead><tr><th>Номер</th><th>Что везём</th><th>Отправитель / маршрут</th><th>Статус</th><th>Даты</th></tr></thead><tbody>${body}</tbody></table></div>
+  <script>setTimeout(function(){ window.print(); }, 400);<\/script></body></html>`;
+  const w = window.open('', '_blank');
+  if(!w){ toast('Разрешите всплывающие окна для сайта', true); return; }
+  w.document.open(); w.document.write(html); w.document.close();
 }

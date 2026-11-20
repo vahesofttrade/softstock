@@ -62,6 +62,7 @@
     <div class="nav-item" data-pane="orders" onclick="showPane('orders')"><span class="nav-icon">▣</span>Orders</div>
     <div class="nav-item" data-pane="supstock" onclick="showPane('supstock')"><span class="nav-icon">⛟</span>Склад поставщика</div>
     <div class="nav-item" data-pane="deliveries" onclick="showPane('deliveries')"><span class="nav-icon">▽</span>Deliveries</div>
+    <div class="nav-item" data-pane="shipments" onclick="showPane('shipments')"><span class="nav-icon">⚓</span>Контейнеры</div>
 
     <div class="nav-group-label">Управление</div>
     <div class="nav-item" data-pane="products" onclick="showPane('products')"><span class="nav-icon">⚙</span>Products</div>
@@ -759,6 +760,31 @@
         <div style="overflow-x:auto"><table id="ssStockTable"><thead><tr>
           <th>Товар</th><th>Тип</th><th>Склад</th><th>Готово у пост., кг</th><th>Наш остаток</th><th>В пути</th><th>Потребность/мес</th><th>Запас, дн.</th><th>Нужно до цели</th><th>В плане</th>
         </tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
+    <!-- SHIPMENTS (контейнеры: готовая продукция / оборудование — отдельно от сырья) -->
+    <div class="pane" id="pane-shipments">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><h1 class="page-title">🚢 Контейнеры</h1><p class="page-sub">Готовая продукция, оборудование, запчасти — отдельный учёт, на склад сырья не влияет</p></div>
+        <div class="svc-btns" style="margin:0">
+          <button class="btn btn-brand btn-sm" onclick="shOpenEdit()">＋ Новая отправка</button>
+          <button class="btn btn-ghost btn-sm" onclick="shPrint()">🖨 Печать / PDF</button>
+          <button class="btn btn-ghost btn-sm" onclick="shLoad(true)">↻</button>
+        </div>
+      </div>
+      <div class="grid" id="shKpis" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:14px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        <div class="pill-row" id="shStatusBar" style="margin:0"></div>
+        <select id="shCat" class="ctl" onchange="shRender()">
+          <option value="">Все категории</option><option value="finished">Готовая продукция</option><option value="equipment">Оборудование / станки</option><option value="parts">Запчасти</option><option value="other">Прочее</option>
+        </select>
+        <input id="shSearch" class="ctl" placeholder="🔍 Номер, товар, отправитель…" oninput="shRender()" style="width:240px">
+      </div>
+      <div class="card" style="padding:0;overflow-x:auto">
+        <table id="shTable"><thead><tr>
+          <th>Номер</th><th>Что везём</th><th>Отправитель / маршрут</th><th>Статус</th><th>Прибытие</th><th class="nosort">Последнее</th>
+        </tr></thead><tbody><tr><td colspan="6" class="empty">Загрузка…</td></tr></tbody></table>
       </div>
     </div>
 
