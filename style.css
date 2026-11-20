@@ -521,3 +521,14 @@ tr[data-pcard]:hover td{background:var(--brand-light)}
 .sup-cell b{color:#6d28d9}
 .sup-cell-n{font-size:10px;color:var(--text-3);font-weight:400;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #fcAddModal{z-index:2000}
+#dvRepModal{position:fixed;inset:0;background:rgba(15,23,20,.45);z-index:1000;display:none;align-items:center;justify-content:center;padding:12px}
+.dv-rep-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px}
+.dv-rep-grid select,.dv-rep-grid input{width:100%;box-sizing:border-box}
+.dv-rep-chk{display:flex;align-items:center;gap:8px;font-size:13px;margin-top:6px;cursor:pointer}
+.dv-rep-chk input{width:auto}
+@media (max-width:600px){ .dv-rep-grid{grid-template-columns:1fr} }
+.dv-transit{margin-bottom:20px;border-left:4px solid var(--brand)}
+.dv-t-table td{vertical-align:middle}
+.dv-t-table tbody tr:hover td{background:var(--brand-light)}
+.dv-t-sub{font-size:10.5px;color:var(--text-3)}
+.del-folder.dv-flash{box-shadow:0 0 0 3px var(--brand);transition:box-shadow .3s}

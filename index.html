@@ -397,6 +397,8 @@
         <button class="btn btn-ghost btn-sm" onclick="showPane('scanner')">📷 Scan Invoice</button>
       </div>
 
+      <div id="dvTransit"></div>
+
       <div class="card" style="margin-bottom:20px">
         <div class="card-title" style="margin-bottom:12px" id="dvFormTitle">Add delivery</div>
         <input type="hidden" id="dv-edit-id">
@@ -423,9 +425,10 @@
 
       <div class="card">
         <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-wrap:wrap;gap:8px">
-          <div class="card-title">Pending &amp; recent</div>
+          <div class="card-title">Поставки по машинам</div>
           <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
             <select id="deliverySort" onchange="renderDeliveries()" style="padding:6px 10px;font-size:12.5px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--surface);outline:none">
+              <option value="eta">Ближайшие сначала</option>
               <option value="date-desc">Дата ↓ (новые)</option>
               <option value="date-asc">Дата ↑ (старые)</option>
               <option value="qty-desc">Количество ↓</option>
@@ -434,6 +437,7 @@
               <option value="truck">Машина А→Я</option>
             </select>
             <div class="pill-row" id="deliveryFilterBar" style="margin:0"></div>
+            <button class="btn btn-ghost btn-sm" onclick="openDeliveryReport()">🖨 Отчёт PDF</button>
           </div>
         </div>
         <div id="deliveryList"></div>
