@@ -52,15 +52,20 @@ async function sb(path, opts = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function isAdminToken(authHeader) {
+// кто вызывает: { id, role, name } по токену входа SoftStock, иначе null
+async function userFromToken(authHeader) {
   const token = (authHeader || '').replace(/^Bearer\s+/i, '');
-  if (!token) return false;
+  if (!token) return null;
   const res = await fetch(SUPABASE_URL + '/auth/v1/user', { headers: { apikey: SERVICE_KEY, Authorization: 'Bearer ' + token } });
-  if (!res.ok) return false;
+  if (!res.ok) return null;
   const user = await res.json();
-  if (!user || !user.id) return false;
-  const rows = await sb('profiles?select=role&id=eq.' + encodeURIComponent(user.id));
-  return !!(rows && rows[0] && rows[0].role === 'admin');
+  if (!user || !user.id) return null;
+  const rows = await sb('profiles?select=role,full_name&id=eq.' + encodeURIComponent(user.id));
+  return rows && rows[0] ? { id: user.id, role: rows[0].role, name: rows[0].full_name || user.email || '' } : null;
+}
+async function isAdminToken(authHeader) {
+  const u = await userFromToken(authHeader);
+  return !!(u && u.role === 'admin');
 }
 
 // ── почта ──
@@ -223,6 +228,63 @@ async function buildSummary() {
   return { subject, html: wrap('Сводка на ' + ruDate(today), body), to: recipients(settings) };
 }
 
+// ── уведомление о смене статуса: контейнер (shipments) или фура (deliveries) ──
+const SH_ST = { ordered:'Заказано', production:'Производство', shipped:'В пути', port:'В порту', customs:'Таможня', delivered:'Доставлено', cancelled:'Отменено' };
+const SH_CAT = { finished:'Готовая продукция', equipment:'Оборудование / станки', parts:'Запчасти', other:'Прочее' };
+const SH_KIND = { container:'Контейнер', truck:'Фура', air:'Авиа', rail:'Ж/д', other:'Отправка' };
+const row2 = (l, v) => v ? '<tr><td style="' + TD + ';color:#5B6660;width:38%">' + l + '</td><td style="' + TD + ';font-weight:600">' + v + '</td></tr>' : '';
+
+async function buildShipmentStatus(eventId, actor) {
+  const ev = (await sb('shipment_events?select=*&id=eq.' + Number(eventId)))[0];
+  if (!ev) throw new Error('событие не найдено');
+  const sh = (await sb('shipments?select=*&id=eq.' + Number(ev.shipment_id)))[0];
+  if (!sh) throw new Error('отправка не найдена');
+  const items = await sb('shipment_items?select=name,qty,unit&shipment_id=eq.' + sh.id + '&order=id');
+  const st = SH_ST[ev.status] || SH_ST[sh.status] || ev.status;
+  const name = (sh.ref_no || sh.title || ('#' + sh.id));
+  const subject = (sh.kind === 'container' ? '🚢 ' : sh.kind === 'truck' ? '🚛 ' : '📦 ') + name + ': ' + st;
+  let body = '<p style="font-size:15px;margin:0 0 12px">' + esc(SH_KIND[sh.kind] || 'Отправка') + ' <b>' + esc(name) + '</b> — новый статус: '
+    + '<span style="background:#E7F3EE;color:#0F6E56;font-weight:700;padding:2px 10px;border-radius:99px">' + esc(st) + '</span></p>';
+  if (ev.note) body += '<p style="font-size:14px;margin:0 0 12px;padding:8px 12px;background:#FFFBEB;border:1px solid #fcd34d;border-radius:6px">' + esc(ev.note) + '</p>';
+  body += '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin:0 0 14px">'
+    + row2('Что везём', esc((SH_CAT[sh.category] || '') + (sh.title ? ' · ' + sh.title : '')))
+    + row2('Отправитель', esc(sh.sender)) + row2('Маршрут', esc((sh.origin || '?') + ' → ' + (sh.destination || '?')))
+    + row2('Перевозчик / судно', esc([sh.carrier, sh.vessel].filter(Boolean).join(' · ')))
+    + row2('Прибытие в порт (ETA)', sh.eta ? ruDate(sh.eta) : '') + row2('Доставка на склад', sh.eta_final ? ruDate(sh.eta_final) : '')
+    + row2('Дата события', ruDate(ev.at)) + row2('Изменил', esc(ev.user_name || actor || ''))
+    + '</table>';
+  if (items && items.length) body += h3('Состав') + '<ul style="margin:4px 0 0 18px;padding:0;font-size:13px">'
+    + items.map(i => '<li>' + esc(i.name) + (i.qty != null ? ' — ' + kg(i.qty) + ' ' + esc(i.unit || '') : '') + '</li>').join('') + '</ul>';
+  return { subject, html: wrap('Статус отправки изменён', body) };
+}
+
+async function buildDeliveryStatus(ids, actor) {
+  ids = (ids || []).map(Number).filter(Boolean).slice(0, 200);
+  if (!ids.length) throw new Error('нет поставок');
+  const rows = await sb('deliveries?select=*,products(name,type,width_cm,ply,gsm),suppliers(name)&id=in.(' + ids.join(',') + ')');
+  if (!rows || !rows.length) throw new Error('поставки не найдены');
+  // по машинам
+  const trucks = {};
+  rows.forEach(d => { const k = (d.plate_no || '— без номера —') + '|' + (d.expected_date || ''); (trucks[k] = trucks[k] || []).push(d); });
+  const keys = Object.keys(trucks);
+  const total = rows.reduce((a, d) => a + Number(d.quantity || 0), 0);
+  const subject = '🚛 Получено: ' + (keys.length === 1 ? (rows[0].plate_no || 'машина') : keys.length + ' машин(ы)') + ' · ' + kg(total) + ' кг';
+  let body = '';
+  for (const k of keys) {
+    const list = trucks[k], d0 = list[0];
+    // сколько ещё в пути в этой машине
+    const same = await sb('deliveries?select=id,status&plate_no=eq.' + encodeURIComponent(d0.plate_no || '') + (d0.expected_date ? '&expected_date=eq.' + d0.expected_date : '&expected_date=is.null'));
+    const left = (same || []).filter(x => x.status === 'pending').length;
+    body += h3('Машина ' + esc(d0.plate_no || '—') + ' · ' + esc(d0.suppliers?.name || '—'))
+      + '<div style="font-size:12px;color:#5B6660;margin-bottom:4px">ожидалась ' + (d0.expected_date ? ruDate(d0.expected_date) : '—') + (left ? ' · <b style="color:#B26B00">в пути ещё ' + left + ' поз.</b>' : ' · <b style="color:#0F6E56">машина получена полностью</b>') + '</div>'
+      + '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin:4px 0 16px"><tr><th style="' + TH + '">Вид</th><th style="' + TH + '">Товар</th><th style="' + TH + '">Кг</th></tr>'
+      + list.map(d => { const p = d.products || {}; return '<tr><td style="' + TD + '">' + esc(p.type || '') + '</td><td style="' + TD + '">' + esc((p.name || '') + ' · ' + (p.width_cm ?? '—') + 'cm·' + (p.ply ?? '—') + 'ply·' + (p.gsm ?? '—') + 'gsm') + '</td><td style="' + TD + ';font-weight:700;white-space:nowrap">' + kg(d.quantity) + '</td></tr>'; }).join('')
+      + '</table>';
+  }
+  body += '<div style="font-size:12px;color:#5B6660">Отметил: ' + esc(actor || '') + ' · всего ' + kg(total) + ' кг добавлено на склад</div>';
+  return { subject, html: wrap('Поставка получена', body) };
+}
+
 exports.handler = async (event) => {
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: cors, body: '' };
   if (event.httpMethod !== 'POST') return reply(405, { success: false, error: 'Method not allowed' });
@@ -235,6 +297,17 @@ exports.handler = async (event) => {
   const h = event.headers || {};
   const fromCron = (h['x-cron-secret'] || h['X-Cron-Secret']) === cronSecret();
   try {
+    if (mode === 'status') {
+      // уведомление о смене статуса может отправить любой, кто может менять данные (admin / user)
+      const u = await userFromToken(h.authorization || h.Authorization);
+      if (!u || !['admin', 'user'].includes(u.role)) return reply(403, { success: false, error: 'Нет прав.' });
+      const { settings } = await loadState();
+      if (settings.status_notify_enabled === 'false') return reply(200, { success: true, sent: 'disabled' });
+      if (settings.status_notify_self === 'false' && u.role === 'admin') return reply(200, { success: true, sent: 'self-skipped' });
+      const m = body.kind === 'shipment' ? await buildShipmentStatus(body.event_id, u.name) : await buildDeliveryStatus(body.ids, u.name);
+      await sendMail(recipients(settings), m.subject, m.html);
+      return reply(200, { success: true, sent: 'status' });
+    }
     if (!fromCron && !(await isAdminToken(h.authorization || h.Authorization))) {
       return reply(403, { success: false, error: 'Только для администратора.' });
     }
