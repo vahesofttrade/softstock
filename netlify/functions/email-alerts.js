@@ -332,7 +332,10 @@ async function logisticsSections() {
 const path = require('path');
 const fs = require('fs');
 function findFont(name) {
-  const c = [path.join(__dirname, 'fonts', name), path.join(__dirname, 'netlify', 'functions', 'fonts', name), path.join(process.cwd(), 'netlify', 'functions', 'fonts', name), path.join('/var/task', 'netlify', 'functions', 'fonts', name), path.join(__dirname, '..', 'fonts', name)];
+  // папка может называться fonts или Fonts (на сервере регистр букв важен)
+  const c = [];
+  for (const dir of ['fonts', 'Fonts']) c.push(path.join(__dirname, dir, name), path.join(__dirname, 'netlify', 'functions', dir, name),
+    path.join(process.cwd(), 'netlify', 'functions', dir, name), path.join('/var/task', 'netlify', 'functions', dir, name), path.join(__dirname, '..', dir, name));
   return c.find(f => { try { return fs.existsSync(f); } catch (e) { return false; } });
 }
 async function buildSummaryPdf() {
