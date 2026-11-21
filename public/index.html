@@ -59,6 +59,7 @@
 
     <div class="nav-group-label">Аналитика</div>
     <div class="nav-item" data-pane="forecast" onclick="showPane('forecast')"><span class="nav-icon">◷</span>Forecast</div>
+    <div class="nav-item" data-pane="dynamics" onclick="showPane('dynamics')"><span class="nav-icon">⇅</span>Динамика расхода</div>
     <div class="nav-item" data-pane="orders" onclick="showPane('orders')"><span class="nav-icon">▣</span>Orders</div>
     <div class="nav-item" data-pane="supstock" onclick="showPane('supstock')"><span class="nav-icon">⛟</span>Склад поставщика</div>
     <div class="nav-item" data-pane="deliveries" onclick="showPane('deliveries')"><span class="nav-icon">▽</span>Deliveries</div>
@@ -788,6 +789,45 @@
       </div>
     </div>
 
+    <!-- DYNAMICS (динамика расхода: реперные точки) -->
+    <div class="pane" id="pane-dynamics">
+      <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div><h1 class="page-title">⇅ Динамика расхода</h1><p class="page-sub" id="dynSub">Реперные точки расхода и их сравнение · крупные разовые отгрузки исключены</p></div>
+        <div class="svc-btns" style="margin:0">
+          <button class="btn btn-ghost btn-sm" onclick="dynExportExcel()">📊 Excel</button>
+          <button class="btn btn-ghost btn-sm" onclick="dynPrint()">🖨 PDF / печать</button>
+          <button class="btn btn-ghost btn-sm" onclick="loadDynamics(true).then(renderDynamics)">↻</button>
+        </div>
+      </div>
+      <div class="grid" id="dynKpis" style="grid-template-columns:repeat(auto-fit,minmax(170px,1fr));margin-bottom:12px"></div>
+      <div class="dyn-ctl">
+        <span>Точка</span><select id="dynCp" class="ctl" onchange="renderDynamics()" title="Реперная точка: расход накопительно с 1-го числа"></select>
+        <span>сравнить</span><select id="dynA" class="ctl" onchange="renderDynamics()"></select>
+        <span>с</span><select id="dynB" class="ctl" onchange="renderDynamics()"></select>
+        <select id="dynType" class="ctl" onchange="renderDynamics()"><option value="">Все виды</option></select>
+        <select id="dynStatus" class="ctl" onchange="renderDynamics()">
+          <option value="signal">Только изменения</option><option value="up_conf">Рост подтверждён</option><option value="down_conf">Падение подтверждено</option>
+          <option value="early">Ранние сигналы</option><option value="spike">Скачки</option><option value="all">Все важные позиции</option>
+        </select>
+        <input id="dynSearch" class="ctl" placeholder="🔍 Поиск…" oninput="renderDynamics()" style="width:170px">
+      </div>
+      <div class="pc-note" id="dynLegend" style="margin:6px 0 10px"></div>
+      <div class="card" style="padding:0;overflow-x:auto;margin-bottom:18px">
+        <table id="dynTable"><thead><tr>
+          <th>Товар</th><th>Тип</th><th class="nosort">По месяцам</th><th id="dynThA">Точка А</th><th id="dynThB">Точка Б</th><th>Изменение</th><th>Статус</th><th class="nosort">Ручная норма</th>
+        </tr></thead><tbody></tbody></table>
+      </div>
+      <div class="card" style="margin-bottom:18px">
+        <div class="card-title" style="margin-bottom:10px">По видам основы</div>
+        <div style="overflow-x:auto"><table id="dynTypeTable"><thead><tr><th>Вид</th><th id="dynTtA">Точка А</th><th id="dynTtB">Точка Б</th><th>Изменение</th></tr></thead><tbody></tbody></table></div>
+      </div>
+      <div class="card">
+        <div class="card-title" style="margin-bottom:4px">Крупные разовые отгрузки — вне статистики</div>
+        <div class="pc-note" style="margin:0 0 10px" id="dynLargeNote"></div>
+        <div style="overflow-x:auto"><table id="dynLargeTable"><thead><tr><th>Дата</th><th>Товар</th><th>Тип</th><th>Списано, кг</th><th>Обычное списание</th><th>Обычно в месяц</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+
     <!-- AUDIT LOG -->
     <div class="pane" id="pane-audit">
       <div class="page-header" style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;flex-wrap:wrap">
@@ -890,6 +930,7 @@
 
       <div class="pc-pane" id="pcTab-analytics">
         <div id="pcSupStock"></div>
+        <div id="pcDyn"></div>
         <div class="pc-ana-kpis" id="pcAnaKpis"></div>
         <div class="pc-ana-head">
           <div class="pc-chart-title">Приход и расход, кг</div>

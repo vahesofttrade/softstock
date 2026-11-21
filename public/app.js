@@ -111,6 +111,7 @@ function showPane(name){
   if(name==='audit') loadAudit(true);
   if(name==='supstock') renderSupStock(true);
   if(name==='shipments') shLoad(true);
+  if(name==='dynamics') renderDynamics();
   if(name==='service') renderService();
 }
 
@@ -127,6 +128,7 @@ function toggleSidebar(force){
 // ---------------------------------------------------------------
 async function refreshAll(){
   await Promise.all([loadProducts(), loadSuppliers(), loadDeliveries(), loadStockLog(), loadReservations(), loadProfileNames(), loadSupStock()]);
+  loadDynamics(true).then(()=>{ try{ renderOrders(); }catch(e){} });
   fillProductSelects();
   fillSupplierSelect();
   renderDashboard();
@@ -1656,6 +1658,7 @@ function orderRowHtml(r){
     <td class="num" style="color:var(--brand)">${r.pending>0?'+'+fmt(r.pending).toLocaleString():'—'}</td>
     <td class="num" data-sort="${supStockFor(p.id).total}">${supStockCellHtml(p.id)}</td>
     <td class="num" style="color:var(--text-2)">${r.monthly>0?fmt(r.monthly).toLocaleString()+' kg'+(r.usedManual?' <span style="font-size:10px;font-weight:600;color:var(--brand)">ручн.</span>':(orderRateMode==='manual'?' <span style="font-size:10px;color:var(--text-3)" title="Ручной нормы нет — взято взвешенное среднее">взв.</span>':'')):'—'}</td>
+    <td>${dynOrderCell(p.id)}</td>
     <td class="num">${r.targetQty>0?fmt(r.targetQty).toLocaleString()+' kg<div style="font-size:9px;color:var(--text-3)">'+r.targetMonths+'mo</div>':'—'}</td>
     <td class="num" style="font-weight:600;color:${r.suggested>0?'var(--red)':'var(--green)'}">${r.suggested>0?fmt(r.suggested).toLocaleString()+' kg':'✓'}</td>
     <td><input type="number" class="ord-qty" data-pid="${p.id}" value="${qty}" min="0" step="500" placeholder="0" oninput="onOrderQtyInput(${p.id},this)" style="width:90px;padding:6px 8px;font-size:12.5px;border:1.5px solid ${qty?'var(--brand)':'var(--border)'};border-radius:var(--radius-sm);background:${qty?'var(--brand-light)':'var(--surface)'};color:var(--text);outline:none;font-weight:${qty?600:400}"></td>
@@ -1677,6 +1680,7 @@ function renderOrderTable(rows){
     <th>Incoming</th>
     <th style="color:#6d28d9">У поставщика</th>
     <th>Monthly need</th>
+    <th class="nosort">Динамика</th>
     <th>Target</th>
     <th>Suggested</th>
     <th style="color:var(--brand)">Order Qty</th>
@@ -3058,6 +3062,7 @@ function renderPcSupStock(p){
 function renderPcAnalytics(){
   const p = products.find(x=>x.id===pcState.pid); if(!p) return;
   renderPcSupStock(p);
+  renderPcDyn(p);
   document.querySelectorAll('#pcGranBar .pill').forEach(el=>el.classList.toggle('active', el.dataset.gran===pcState.gran));
   const ev = pcEvents();
   const yearStart = new Date().getFullYear()+'-01-01';
@@ -4865,5 +4870,293 @@ function shPrint(){
   <script>setTimeout(function(){ window.print(); }, 400);<\/script></body></html>`;
   const w = window.open('', '_blank');
   if(!w){ toast('Разрешите всплывающие окна для сайта', true); return; }
+  w.document.open(); w.document.write(html); w.document.close();
+}
+
+
+// ---------------------------------------------------------------
+// ДИНАМИКА РАСХОДА — реперные точки по дням месяца: 5-е, 10-е, 15-е, 20-е, 25-е и конец месяца (итог видно 1-го числа).
+// В каждой точке — расход накопительно с 1-го числа. Сравниваются одинаковые точки разных месяцев:
+//   Текущий   = текущий месяц на последнюю пройденную точку (сегодня 21-е → «по 20-е»)
+//   Прошлый   = прошлый месяц на ту же точку
+//   База      = среднее двух месяцев перед прошлым на ту же точку
+//   Год назад = тот же месяц год назад на ту же точку
+// Статус «подтверждено»: прошлый месяц целиком И текущий на свою точку отличаются от базы в одну сторону ≥ порога.
+// Крупные разовые отгрузки (SQL softstock_large_moves) исключены из всех цифр.
+// ---------------------------------------------------------------
+const fmtI = x=> Math.round(Number(x)||0);
+const RU_MON = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+const RU_MON_FULL = ['январь','февраль','март','апрель','май','июнь','июль','август','сентябрь','октябрь','ноябрь','декабрь'];
+const DYN_CP = [5,10,15,20,25,0];             // 0 = конец месяца
+const DYN_END = 5;                            // индекс «конец месяца»
+const cpName = i=> DYN_CP[i] ? 'по '+DYN_CP[i]+'-е' : 'весь месяц';
+const cpShort = i=> DYN_CP[i] ? DYN_CP[i]+'-е' : 'конец';
+let dynRows = [], dynLarge = [], dynErr = '', dynLoaded = false, dynCfg = { pct:25, min:1000 };
+const dynMap = {};   // pid → { 'YYYY-MM': расход за месяц (текущий — на сегодня) }
+const dynCP = {};    // pid → { 'YYYY-MM': [по 5, по 10, по 15, по 20, по 25, весь месяц] }
+const ymKey = d=> d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+const ymAdd = (ym, n)=>{ const [y,m] = ym.split('-').map(Number); return ymKey(new Date(y, m-1+n, 1)); };
+const ymLabel = (ym, full)=>{ const [y,m] = ym.split('-').map(Number); return (full?RU_MON_FULL:RU_MON)[m-1]+(full?' '+y:" '"+String(y).slice(2)); };
+
+async function loadDynamics(force){
+  if(dynLoaded && !force) return;
+  const from = new Date(new Date().getFullYear()-1, 0, 1).toISOString().slice(0,10);
+  const rows = [];
+  for(let off=0;;off+=1000){
+    const { data, error } = await sb.rpc('softstock_monthly_consumption', { p_from: from }).range(off, off+999);
+    if(error){ dynErr = /softstock_monthly_consumption|function/.test(error.message) ? 'Отчёт ещё не включён — выполните в Supabase скрипт migration_trends.sql.' : error.message; dynLoaded = false; return; }
+    rows.push(...(data||[])); if(!data || data.length<1000) break;
+  }
+  if(rows.length && rows[0].c5 === undefined){ dynErr = 'Обновите отчёт — выполните в Supabase новую версию скрипта migration_trends.sql (реперные точки 5/10/15/20/25).'; dynLoaded = false; return; }
+  const lg = await sb.rpc('softstock_large_moves', { p_since: new Date(Date.now()-180*86400000).toISOString().slice(0,10) });
+  const st = await sb.from('app_settings').select('key,value').in('key',['trend_pct','trend_min_kg']);
+  (st.data||[]).forEach(r=>{ if(r.key==='trend_pct') dynCfg.pct = Number(r.value)||25; if(r.key==='trend_min_kg') dynCfg.min = Number(r.value)||1000; });
+  dynErr = ''; dynRows = rows; dynLarge = lg.data || [];
+  Object.keys(dynMap).forEach(k=>delete dynMap[k]); Object.keys(dynCP).forEach(k=>delete dynCP[k]);
+  rows.forEach(r=>{ const ym = String(r.month).slice(0,7), q = Number(r.qty)||0;
+    (dynMap[r.product_id] = dynMap[r.product_id] || {})[ym] = q;
+    (dynCP[r.product_id] = dynCP[r.product_id] || {})[ym] = [r.c5,r.c10,r.c15,r.c20,r.c25].map(x=>Number(x)||0).concat([q]); });
+  dynLoaded = true;
+}
+function dynClock(){
+  const t = new Date(), cur = ymKey(t), days = new Date(t.getFullYear(), t.getMonth()+1, 0).getDate(), day = t.getDate();
+  let k = -1; DYN_CP.slice(0,5).forEach((d,i)=>{ if(day>=d) k = i; });   // последняя пройденная точка текущего месяца
+  return { cur, last: ymAdd(cur,-1), b1: ymAdd(cur,-2), b2: ymAdd(cur,-3), yoy: ymAdd(cur,-12), elapsed: day, days, k };
+}
+// точка по умолчанию: последняя пройденная (1–4 числа — итог прошлого месяца)
+const dynDefCp = ()=>{ const k = dynClock().k; return k>=0 ? k : DYN_END; };
+const dynV = (pid, ym, i)=> ((dynCP[pid]||{})[ym]||[])[i] || 0;
+// значение реперной точки (накопительно на день i); null — точка ещё не наступила
+function dynPoint(pid, key, i){
+  const c = dynClock(); if(i==null) i = dynDefCp();
+  const v = ym=> dynV(pid, ym, i);
+  if(key==='base') return (v(c.b1)+v(c.b2))/2;
+  if(key==='last') return v(c.last);
+  if(key==='cur')  return (i<=c.k && i!==DYN_END) ? v(c.cur) : null;
+  if(key==='avg3') return (v(c.last)+v(c.b1)+v(c.b2))/3;
+  if(key==='yoy')  return v(c.yoy);
+  if(key.startsWith('M:')){ const ym = key.slice(2); if(ym===c.cur && !(i<=c.k && i!==DYN_END)) return null; return v(ym); }
+  return 0;
+}
+function dynPointLabel(key){
+  const c = dynClock();
+  if(key==='base') return 'База ('+ymLabel(c.b2)+'–'+ymLabel(c.b1)+')';
+  if(key==='last') return 'Прошлый месяц ('+ymLabel(c.last)+')';
+  if(key==='cur') return 'Текущий месяц ('+ymLabel(c.cur)+')';
+  if(key==='avg3') return 'Среднее 3 мес. ('+ymLabel(c.b2)+'–'+ymLabel(c.last)+')';
+  if(key==='yoy') return 'Год назад ('+ymLabel(c.yoy)+')';
+  if(key.startsWith('M:')) return ymLabel(key.slice(2), true);
+  return key;
+}
+// темп текущего месяца (для подсказок по ручной норме и мини-графика)
+const dynPace = pid=>{ const c = dynClock(); return c.elapsed>=5 ? ((dynMap[pid]||{})[c.cur]||0) * c.days / c.elapsed : 0; };
+// статус по фиксированной логике
+function dynStatus(pid){
+  const c = dynClock(), k = c.k, F = DYN_END;
+  const baseF = (dynV(pid,c.b1,F)+dynV(pid,c.b2,F))/2, lastF = dynV(pid,c.last,F);
+  const curK = k>=0 ? dynV(pid,c.cur,k) : null, baseK = k>=0 ? (dynV(pid,c.b1,k)+dynV(pid,c.b2,k))/2 : null, lastK = k>=0 ? dynV(pid,c.last,k) : null;
+  const dm = lastK>0 && curK!=null ? (curK-lastK)/lastK : null;
+  const r = { baseF, lastF, curK, baseK, lastK, k, dm };
+  const important = Math.max(baseF, lastF, curK||0) >= dynCfg.min;
+  if(!important) return { code:'small', ...r };
+  if(!(baseF>0)) return { code: lastF>0||curK>0 ? 'new' : 'none', ...r };
+  const kk = dynCfg.pct/100, dl = (lastF-baseF)/baseF, dc = baseK>0 && curK!=null ? (curK-baseK)/baseK : null, curOk = dc!=null;
+  const lastUp = dl >= kk, lastDn = dl <= -kk, curUp = curOk && dc >= kk, curDn = curOk && dc <= -kk;
+  let code = 'stable';
+  if(lastUp && curUp) code = 'up_conf';
+  else if(lastDn && curDn) code = 'down_conf';
+  else if((lastUp || lastDn) && !curOk) code = lastUp ? 'up_one' : 'down_one';
+  else if(lastUp || lastDn) code = 'spike';
+  else if(curUp || curDn) code = curUp ? 'up_early' : 'down_early';
+  return { code, ...r, dl, dc };
+}
+const DYN_ST = {
+  up_conf:   ['▲ Рост подтверждён',   '#1d4ed8', '#E7EFFC'],
+  down_conf: ['▼ Падение подтверждено','#9A5F12', '#FBF1E3'],
+  up_one:    ['▲ Рост, 1 месяц',      '#1d4ed8', '#fff'],
+  down_one:  ['▼ Падение, 1 месяц',   '#9A5F12', '#fff'],
+  up_early:  ['▲ Ранний сигнал',      '#1d4ed8', '#fff'],
+  down_early:['▼ Ранний сигнал',      '#9A5F12', '#fff'],
+  spike:     ['↕ Скачок',             '#5B6660', '#F0F2EF'],
+  stable:    ['= Стабильно',          '#0F6E56', '#fff'],
+  new:       ['● Новый расход',       '#5B6660', '#fff'],
+  none:      ['—',                    '#8A938E', '#fff'],
+  small:     ['мелкая позиция',        '#8A938E', '#fff']
+};
+function dynBadge(code, extra){ const s = DYN_ST[code] || DYN_ST.none; return `<span class="dyn-badge" style="color:${s[1]};background:${s[2]};border-color:${s[1]}55">${s[0]}${extra?' '+extra:''}</span>`; }
+const pctTxt = x=> x==null||!isFinite(x) ? '—' : (x>=0?'+':'−')+Math.abs(Math.round(x*100))+'%';
+const kgTxt = x=> x==null ? '—' : fmtI(x).toLocaleString();
+// мини-график: 6 полных месяцев + текущий по темпу
+function dynSpark(pid){
+  const c = dynClock(), months = [-6,-5,-4,-3,-2,-1].map(n=>ymAdd(c.cur,n));
+  const vals = months.map(ym=>(dynMap[pid]||{})[ym]||0).concat([dynPace(pid)]);
+  const mx = Math.max(...vals, 1), W = 7*14, H = 26;
+  return `<svg width="${W}" height="${H+10}" class="dyn-spark" aria-label="расход по месяцам">${vals.map((v,i)=>{ const h = Math.max(1, v/mx*H), x = i*14+2;
+    const isCur = i===6, isBase = i===3||i===4, isLast = i===5;
+    return `<rect x="${x}" y="${H-h}" width="10" height="${h}" rx="2" fill="${isCur?'#9DB8EE':isLast?'#2F6FDB':isBase?'#8A938E':'#C9CFCB'}"><title>${isCur?'текущий по темпу':ymLabel([...months][i],true)}: ${fmtI(v).toLocaleString()} кг</title></rect>`; }).join('')}
+    <text x="0" y="${H+9}" font-size="7.5" fill="#8A938E">${ymLabel(months[0])}</text><text x="${W}" y="${H+9}" font-size="7.5" fill="#8A938E" text-anchor="end">сейч.</text></svg>`;
+}
+function dynNormHint(p){
+  const man = Number(p.manual_monthly_rate)||0; if(!(man>0)) return '<span class="pc-note" style="margin:0">—</span>';
+  const c = dynClock(), lastF = dynV(p.id, c.last, DYN_END), pace = dynPace(p.id);
+  const fact = pace>0 ? (lastF + pace)/2 : lastF;
+  if(!(fact>0)) return `${fmtI(man).toLocaleString()}`;
+  const d = (fact-man)/man;
+  return Math.abs(d) >= dynCfg.pct/100 ? `<span title="Ручная норма ${fmtI(man).toLocaleString()} кг/мес, факт ~${fmtI(fact).toLocaleString()}">${fmtI(man).toLocaleString()} <b style="color:var(--amber)">→ ~${fmtI(fact).toLocaleString()}?</b></span>` : `${fmtI(man).toLocaleString()} ✓`;
+}
+
+function dynFillSelects(){
+  const a = document.getElementById('dynA'), b = document.getElementById('dynB'), cp = document.getElementById('dynCp'); if(!a) return;
+  const c = dynClock();
+  const months = Object.keys(Object.assign({}, ...Object.values(dynMap))).filter(m=>m<c.cur).sort().reverse();
+  const opts = [['cur',dynPointLabel('cur')],['last',dynPointLabel('last')],['base',dynPointLabel('base')],['avg3',dynPointLabel('avg3')],['yoy',dynPointLabel('yoy')]]
+    .concat(months.map(m=>['M:'+m, ymLabel(m,true)]));
+  const html = opts.map(([k,l])=>`<option value="${k}">${escHtml(l)}</option>`).join('');
+  const first = !a.options.length;
+  const va = a.value || 'base', vb = b.value || (c.k>=0 ? 'cur' : 'last');
+  a.innerHTML = html; b.innerHTML = html; a.value = va; b.value = vb;
+  if(first || !cp.options.length){
+    cp.innerHTML = DYN_CP.map((d,i)=>`<option value="${i}">${d ? 'на '+d+'-е число' : 'конец месяца (1-е)'}${i===c.k?' — сейчас':''}</option>`).join('');
+    cp.value = String(dynDefCp());
+  }
+  const t = document.getElementById('dynType');
+  if(t.options.length<=1) t.innerHTML = '<option value="">Все виды</option>' + [...new Set(products.map(p=>p.type))].sort().map(x=>`<option>${escHtml(x)}</option>`).join('');
+}
+const dynSelCp = ()=>{ const el = document.getElementById('dynCp'); return el && el.value!=='' ? Number(el.value) : dynDefCp(); };
+function dynRowsFiltered(){
+  const ty = document.getElementById('dynType').value, st = document.getElementById('dynStatus').value, q = (document.getElementById('dynSearch').value||'').toLowerCase().trim();
+  const A = document.getElementById('dynA').value, B = document.getElementById('dynB').value, i = dynSelCp();
+  return products.filter(p=>dynMap[p.id]).map(p=>{ const s = dynStatus(p.id), a = dynPoint(p.id,A,i), b = dynPoint(p.id,B,i);
+      return { p, s, a, b, d: a>0 && b!=null ? (b-a)/a : null }; })
+    .filter(r=>{
+      if(ty && r.p.type!==ty) return false;
+      if(q && !(productLabel(r.p)+' '+r.p.type).toLowerCase().includes(q)) return false;
+      if(r.s.code==='small' && st!=='all') return false;
+      if(st==='all') return r.s.code!=='small';
+      if(st==='signal') return ['up_conf','down_conf','up_one','down_one','up_early','down_early','spike'].includes(r.s.code);
+      if(st==='early') return ['up_one','down_one','up_early','down_early'].includes(r.s.code);
+      return r.s.code===st;
+    })
+    .sort((x,y)=>{ const rank = c=>({up_conf:0,down_conf:1,up_one:2,down_one:3,up_early:4,down_early:5,spike:6,new:7,stable:8})[c]??9;
+      return rank(x.s.code)-rank(y.s.code) || Math.abs(y.d??0)-Math.abs(x.d??0); });
+}
+async function renderDynamics(){
+  if(!document.getElementById('pane-dynamics')) return;
+  if(!dynLoaded) await loadDynamics();
+  const tb = document.querySelector('#dynTable tbody');
+  if(dynErr){ tb.innerHTML = `<tr><td colspan="8" class="empty">${escHtml(dynErr)}</td></tr>`; document.getElementById('dynKpis').innerHTML=''; return; }
+  dynFillSelects();
+  const A = document.getElementById('dynA').value, B = document.getElementById('dynB').value, c = dynClock(), i = dynSelCp();
+  const thA = 'А: '+dynPointLabel(A)+', '+cpName(i), thB = 'Б: '+dynPointLabel(B)+', '+cpName(i);
+  document.getElementById('dynThA').textContent = thA; document.getElementById('dynThB').textContent = thB;
+  document.getElementById('dynTtA').textContent = thA; document.getElementById('dynTtB').textContent = thB;
+  const curNA = (A==='cur'||B==='cur'||A==='M:'+c.cur||B==='M:'+c.cur) && !(i<=c.k && i!==DYN_END);
+  document.getElementById('dynLegend').innerHTML = `Реперные точки — расход накопительно с 1-го числа <b>на 5-е, 10-е, 15-е, 20-е, 25-е</b> и <b>за весь месяц</b> (итог виден 1-го). Сравниваются одинаковые точки разных месяцев. `
+    + `Сейчас ${c.k>=0?`пройдена точка <b>${cpShort(c.k)}</b>`:'текущий месяц ещё до 5-го — смотрим итог прошлого'}. `
+    + `Статус: <b>подтверждено</b>, если ${ymLabel(c.last)} целиком и ${ymLabel(c.cur)} ${c.k>=0?cpName(c.k):''} отличаются от базы (${ymLabel(c.b2)}–${ymLabel(c.b1)} на ту же точку) в одну сторону на ${dynCfg.pct}% и больше. Учитываются позиции от ${fmtI(dynCfg.min).toLocaleString()} кг/мес.`
+    + (curNA ? `<br><b style="color:var(--amber)">Точка «${cpShort(i)}» в текущем месяце ещё не наступила — для текущего месяца выберите ${c.k>=0?cpShort(c.k):'другую точку'} или раньше.</b>` : '');
+  // KPI
+  const all = products.filter(p=>dynMap[p.id]).map(p=>dynStatus(p.id).code);
+  const cnt = codes=> all.filter(x=>codes.includes(x)).length;
+  const kpi = (l,v,col,f)=>`<div class="card kpi-card" style="cursor:pointer;padding:12px 14px" onclick="document.getElementById('dynStatus').value='${f}';renderDynamics()"><div class="pc-note" style="margin:0;text-transform:uppercase;font-size:10.5px;letter-spacing:.04em">${l}</div><div style="font-size:22px;font-weight:700;color:${col}">${v}</div></div>`;
+  document.getElementById('dynKpis').innerHTML = kpi('▲ Рост подтверждён', cnt(['up_conf']), '#1d4ed8','up_conf') + kpi('▼ Падение подтверждено', cnt(['down_conf']), '#9A5F12','down_conf')
+    + kpi('Ранние сигналы', cnt(['up_one','down_one','up_early','down_early']), '#5B6660','early') + kpi('↕ Скачки', cnt(['spike']), '#5B6660','spike')
+    + kpi('Важных позиций', all.filter(x=>x!=='small').length, 'inherit','all');
+  // таблица
+  const rows = dynRowsFiltered();
+  tb.innerHTML = rows.length ? rows.map(r=>`<tr data-pcard="${r.p.id}" style="cursor:pointer">
+      <td><span class="pname">${escHtml(productLabel(r.p))}</span></td><td>${typeBadgeHtml(r.p.type)}</td>
+      <td>${dynSpark(r.p.id)}</td>
+      <td class="num" data-sort="${r.a??-1}">${kgTxt(r.a)}</td><td class="num" data-sort="${r.b??-1}">${kgTxt(r.b)}</td>
+      <td class="num" data-sort="${r.d??-9}"><b style="color:${r.d==null?'inherit':r.d>=dynCfg.pct/100?'#1d4ed8':r.d<=-dynCfg.pct/100?'#9A5F12':'inherit'}">${pctTxt(r.d)}</b></td>
+      <td data-sort="${r.s.code}">${dynBadge(r.s.code)}</td><td style="font-size:12px">${dynNormHint(r.p)}</td></tr>`).join('')
+    : '<tr><td colspan="8" class="empty">Нет позиций под выбранный фильтр</td></tr>';
+  // по видам
+  const types = {};
+  products.filter(p=>dynMap[p.id]).forEach(p=>{ const t = (types[p.type] = types[p.type] || {a:0,b:0,na:false}); const a = dynPoint(p.id,A,i), b = dynPoint(p.id,B,i);
+    if(a==null||b==null) t.na = true; t.a += a||0; t.b += b||0; });
+  document.querySelector('#dynTypeTable tbody').innerHTML = Object.entries(types).sort((x,y)=>y[1].b-x[1].b).map(([t,v])=>{ const d = !v.na && v.a>0?(v.b-v.a)/v.a:null;
+    return `<tr><td>${typeBadgeHtml(t)}</td><td class="num">${v.na&&!v.a?'—':fmtI(v.a).toLocaleString()}</td><td class="num">${v.na&&!v.b?'—':fmtI(v.b).toLocaleString()}</td><td class="num"><b>${pctTxt(d)}</b></td></tr>`; }).join('');
+  // крупные отгрузки
+  document.getElementById('dynLargeNote').textContent = 'Разовые списания в 3 и более раза больше обычного по позиции. Они не входят в цифры выше, чтобы не искажать динамику. Последние 6 месяцев.';
+  document.querySelector('#dynLargeTable tbody').innerHTML = dynLarge.length ? dynLarge.map(l=>{ const p = products.find(x=>x.id===l.product_id) || {};
+    return `<tr data-pcard="${l.product_id}" style="cursor:pointer"><td data-sort="${l.d}">${shRu(l.d)}</td><td>${escHtml(productLabel(p))}</td><td>${typeBadgeHtml(p.type||'')}</td><td class="num"><b>${fmtI(l.qty).toLocaleString()}</b></td><td class="num">${fmtI(l.typical_day).toLocaleString()}</td><td class="num">${fmtI(l.base_monthly).toLocaleString()}</td></tr>`; }).join('')
+    : '<tr><td colspan="6" class="empty">Крупных разовых отгрузок не было</td></tr>';
+}
+
+// карточка товара — блок «Динамика расхода»: сетка реперных точек
+function renderPcDyn(p){
+  const host = document.getElementById('pcDyn'); if(!host) return;
+  if(!dynLoaded){ loadDynamics().then(()=>{ if(pcState.pid===p.id) renderPcDyn(p); }); host.innerHTML=''; return; }
+  if(dynErr || !dynMap[p.id]){ host.innerHTML = ''; return; }
+  const s = dynStatus(p.id), c = dynClock(), k = c.k, pid = p.id, lim = dynCfg.pct/100;
+  const base = i=> (dynV(pid,c.b1,i)+dynV(pid,c.b2,i))/2;
+  const curOk = i=> i<=k && i!==DYN_END;
+  const hasYoy = !!(dynCP[pid]||{})[c.yoy];
+  const col = d=> d==null ? 'var(--text-3)' : d>=lim ? '#1d4ed8' : d<=-lim ? '#9A5F12' : 'var(--text-2)';
+  const head = DYN_CP.map((d,i)=>`<th class="num${i===k?' dyn-now':''}">${d?d+'-е':'месяц'}</th>`).join('');
+  const row = (name, sub, fn, cmp)=> `<tr><td><b>${name}</b><br><small>${sub}</small></td>${DYN_CP.map((d,i)=>{ const v = fn(i);
+      if(v==null) return `<td class="num${i===k?' dyn-now':''}" style="color:var(--text-3)">·</td>`;
+      const b = base(i), dd = cmp && b>0 ? (v-b)/b : null;
+      return `<td class="num${i===k?' dyn-now':''}">${fmtI(v).toLocaleString()}${cmp?`<br><small style="color:${col(dd)};font-weight:600">${pctTxt(dd)}</small>`:''}</td>`; }).join('')}</tr>`;
+  const large = dynLarge.filter(l=>l.product_id===pid);
+  const sum = k>=0 ? `На ${cpShort(k)} ${ymLabel(c.cur)}: <b>${fmtI(s.curK).toLocaleString()} кг</b> — к ${ymLabel(c.last)} на ту же дату <b style="color:${col(s.dm)}">${pctTxt(s.dm)}</b>, к базе <b style="color:${col(s.dc)}">${pctTxt(s.dc)}</b>.` : `Текущий месяц — до 5-го числа, первая точка будет 5-го. ${ymLabel(c.last)} целиком к базе: <b style="color:${col(s.dl)}">${pctTxt(s.dl)}</b>.`;
+  host.innerHTML = `<div class="dyn-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+      <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:var(--text-2)">⇅ Динамика расхода — реперные точки, кг с 1-го числа</div>${dynBadge(s.code)}</div>
+    <div class="pc-note" style="margin:0 0 6px">${sum}</div>
+    <div style="overflow-x:auto"><table class="dyn-cp"><thead><tr><th></th>${head}</tr></thead><tbody>
+      ${row('Текущий', ymLabel(c.cur), i=> curOk(i) ? dynV(pid,c.cur,i) : null, true)}
+      ${row('Прошлый', ymLabel(c.last), i=> dynV(pid,c.last,i), true)}
+      ${row('База', ymLabel(c.b2)+'–'+ymLabel(c.b1), base, false)}
+      ${hasYoy?row('Год назад', ymLabel(c.yoy), i=> dynV(pid,c.yoy,i), true):''}
+    </tbody></table></div>
+    <div class="pc-note" style="margin:4px 0 0">Процент — отличие от базы в той же точке. Выделена последняя пройденная точка.</div>
+    ${Number(p.manual_monthly_rate)>0?`<div class="pc-note" style="margin:6px 0 0">Ручная норма: ${dynNormHint(p)}</div>`:''}
+    ${large.length?`<div class="pc-note" style="margin:6px 0 0">Вне статистики (крупные разовые отгрузки): ${large.slice(0,4).map(l=>shRu(l.d)+' — '+fmtI(l.qty).toLocaleString()+' кг').join('; ')}${large.length>4?' …':''}</div>`:''}
+  </div>`;
+}
+// Orders — колонка «Динамика»
+function dynOrderCell(pid){
+  if(!dynLoaded || dynErr || !dynMap[pid]) return '<span class="pc-note" style="margin:0">—</span>';
+  const s = dynStatus(pid), c = dynClock();
+  const tip = `${ymLabel(c.last)} целиком: ${kgTxt(s.lastF)} (база ${kgTxt(s.baseF)})` + (s.k>=0 ? ` · ${ymLabel(c.cur)} ${cpName(s.k)}: ${kgTxt(s.curK)} (база ${kgTxt(s.baseK)}, прошлый ${kgTxt(s.lastK)})` : '') + ' кг';
+  if(['small','none','stable','new'].includes(s.code)) return `<span style="color:var(--text-3);font-size:12px" title="${escHtml(tip)}">${s.code==='stable'?'= стабильно':s.code==='new'?'новый':'—'}</span>`;
+  const d = ['up_early','down_early'].includes(s.code) ? s.dc : s.dl;
+  return `<span title="${escHtml(tip)}">${dynBadge(s.code, pctTxt(d))}</span>`;
+}
+
+// выгрузки
+async function dynExportExcel(){
+  await loadScript('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js');
+  const A = document.getElementById('dynA').value, B = document.getElementById('dynB').value, c = dynClock(), i = dynSelCp();
+  const months = [-6,-5,-4,-3,-2,-1].map(n=>ymAdd(c.cur,n));
+  const rows = dynRowsFiltered().map(r=>{ const o = { 'Товар':r.p.name, 'Тип':r.p.type, 'Ширина, см':Number(r.p.width_cm)||'', 'Слои':r.p.ply, 'GSM':Number(r.p.gsm)||'' };
+    months.forEach(m=>{ o[ymLabel(m,true)] = Math.round((dynMap[r.p.id]||{})[m]||0); });
+    DYN_CP.forEach((d,i)=>{ if(i===DYN_END) return; const cv = dynPoint(r.p.id,'cur',i); o[ymLabel(c.cur)+' по '+d+'-е'] = cv==null?'':Math.round(cv); o['База по '+d+'-е'] = Math.round(dynPoint(r.p.id,'base',i)); });
+    o['А: '+dynPointLabel(A)+', '+cpName(i)] = r.a==null?'':Math.round(r.a); o['Б: '+dynPointLabel(B)+', '+cpName(i)] = r.b==null?'':Math.round(r.b); o['Изменение, %'] = r.d==null?'':Math.round(r.d*100);
+    o['Статус'] = (DYN_ST[r.s.code]||DYN_ST.none)[0]; o['Ручная норма'] = Number(r.p.manual_monthly_rate)||''; return o; });
+  const wb = XLSX.utils.book_new(); const ws = XLSX.utils.json_to_sheet(rows.length?rows:[{'Нет данных':''}]);
+  if(rows.length) ws['!cols'] = Object.keys(rows[0]).map(k=>({wch:Math.max(10,Math.min(34,k.length+2))}));
+  XLSX.utils.book_append_sheet(wb, ws, 'Динамика');
+  const lg = dynLarge.map(l=>{ const p = products.find(x=>x.id===l.product_id)||{}; return { 'Дата':l.d, 'Товар':p.name, 'Тип':p.type, 'Ширина':Number(p.width_cm)||'', 'Слои':p.ply, 'GSM':Number(p.gsm)||'', 'Списано, кг':Number(l.qty), 'Обычное списание, кг':Number(l.typical_day), 'Обычно в месяц, кг':Number(l.base_monthly) }; });
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(lg.length?lg:[{'Нет':''}]), 'Крупные отгрузки');
+  XLSX.writeFile(wb, 'Динамика_расхода_'+todayISO()+'.xlsx');
+}
+function dynPrint(){
+  const A = document.getElementById('dynA').value, B = document.getElementById('dynB').value, c = dynClock(), i = dynSelCp();
+  const rows = dynRowsFiltered(), st = document.getElementById('dynStatus');
+  const body = rows.map(r=>`<tr><td>${escHtml(productLabel(r.p))}</td><td>${escHtml(r.p.type)}</td><td>${dynSpark(r.p.id)}</td><td class="r">${kgTxt(r.a)}</td><td class="r">${kgTxt(r.b)}</td><td class="r"><b>${pctTxt(r.d)}</b></td><td>${(DYN_ST[r.s.code]||DYN_ST.none)[0]}</td></tr>`).join('');
+  const html = `<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><title>Динамика расхода ${todayISO()}</title><style>
+    @page{ size:A4 landscape; margin:12mm 10mm } body{ font-family:Arial,Helvetica,sans-serif; font-size:9.5pt; color:#111; margin:0 }
+    .bar{ background:#0F6E56; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center } .bar button{ background:#fff; color:#0F6E56; border:0; border-radius:6px; padding:8px 14px; font-weight:700; cursor:pointer }
+    .doc{ padding:14px 18px } h1{ font-size:15pt; margin:0 } .muted{ color:#555; font-size:9pt; margin:3px 0 10px }
+    table{ width:100%; border-collapse:collapse } th,td{ border:1px solid #bbb; padding:3px 5px; vertical-align:middle; text-align:left } th{ background:#f2f2f2; font-size:8.5pt } td.r,th.r{ text-align:right } tr{ break-inside:avoid } thead{ display:table-header-group }
+    @media print{ .bar{ display:none } .doc{ padding:0 } th,rect{ -webkit-print-color-adjust:exact; print-color-adjust:exact } }
+  </style></head><body><div class="bar"><span>Для PDF выберите «Сохранить как PDF».</span><span><button onclick="window.print()">🖨 Печать / PDF</button></span></div>
+  <div class="doc"><h1>Динамика расхода</h1><div class="muted">${escHtml(st.options[st.selectedIndex].text)} · точка: ${escHtml(cpName(i))} · А: ${escHtml(dynPointLabel(A))} · Б: ${escHtml(dynPointLabel(B))} · порог ±${dynCfg.pct}%, от ${fmtI(dynCfg.min).toLocaleString()} кг/мес · крупные разовые отгрузки исключены · ${new Date().toLocaleString('ru-RU')}</div>
+  <table><thead><tr><th>Товар</th><th>Тип</th><th>6 мес. + текущий</th><th class="r">А</th><th class="r">Б</th><th class="r">Изм.</th><th>Статус</th></tr></thead><tbody>${body||'<tr><td colspan="7">Нет позиций</td></tr>'}</tbody></table></div>
+  <script>setTimeout(function(){ window.print(); }, 400);<\/script></body></html>`;
+  const w = window.open('', '_blank'); if(!w){ toast('Разрешите всплывающие окна для сайта', true); return; }
   w.document.open(); w.document.write(html); w.document.close();
 }
