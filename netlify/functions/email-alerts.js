@@ -16,6 +16,7 @@
 //   EMAIL_FROM                — необязательно; по умолчанию "SoftStock <onboarding@resend.dev>"
 //   SUPABASE_URL              — необязательно, по умолчанию адрес проекта ниже
 //   SUMMARY_HOUR              — необязательно, час сводки по Еревану, по умолчанию 9
+//   SMTP_USER / SMTP_PASS     — необязательно: отправка через Gmail (адрес + пароль приложения) на любые адреса
 // Адреса получателей задаются на странице «Сервис» (app_settings.alert_email).
 
 const crypto = require('crypto');
@@ -73,9 +74,22 @@ function recipients(settings) {
   return String(settings.alert_email || process.env.ALERT_EMAIL_TO || '')
     .split(/[,;\s]+/).map(s => s.trim()).filter(s => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s));
 }
+// Отправка: если заданы SMTP_USER и SMTP_PASS — через почтовый ящик (Gmail: пароль приложения),
+// письма уходят на ЛЮБЫЕ адреса. Иначе — через Resend (без своего домена только на адрес владельца Resend).
+const SMTP_USER = process.env.SMTP_USER || '';
+const SMTP_PASS = (process.env.SMTP_PASS || '').replace(/\s+/g, '');
 async function sendMail(to, subject, html) {
-  if (!RESEND_KEY) throw new Error('RESEND_API_KEY не задан в Netlify');
   if (!to.length) throw new Error('не указан адрес получателя (страница «Сервис»)');
+  if (SMTP_USER && SMTP_PASS) {
+    let nodemailer;
+    try { nodemailer = require('nodemailer'); } catch (e) { throw new Error('для отправки через Gmail нужен файл package.json в корне репозитория (с nodemailer) и передеплой'); }
+    const tr = nodemailer.createTransport({ host: process.env.SMTP_HOST || 'smtp.gmail.com', port: Number(process.env.SMTP_PORT || 465), secure: Number(process.env.SMTP_PORT || 465) === 465, auth: { user: SMTP_USER, pass: SMTP_PASS } });
+    try {
+      const info = await tr.sendMail({ from: '"SoftStock" <' + SMTP_USER + '>', to: to.join(', '), subject, html });
+      return info.messageId;
+    } catch (e) { throw new Error('Почта (SMTP): ' + (e.response || e.message)); }
+  }
+  if (!RESEND_KEY) throw new Error('RESEND_API_KEY не задан в Netlify');
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + RESEND_KEY, 'Content-Type': 'application/json' },
@@ -217,15 +231,100 @@ async function buildSummary() {
   let body = '<table cellspacing="6" cellpadding="0" style="width:100%;margin:0 -6px 14px"><tr>'
     + tile('На складе', kg(total) + ' кг', (total / 1000).toFixed(1).replace('.', ',') + ' т')
     + tile('Вчера', '+' + kg(yin) + ' / −' + kg(yout), 'приход / расход, кг')
-    + tile('Поставки в пути', String((pend || []).length), kg(pendKg) + ' кг' + (overdue ? ' · <b style="color:#B42318">просрочено ' + overdue + '</b>' : ''))
+    + tile('Позиций в пути', String((pend || []).length), kg(pendKg) + ' кг' + (overdue ? ' · <b style="color:#B42318">просрочено ' + overdue + '</b>' : ''))
     + tile('Резервы', String((res || []).length), kg(resKg) + ' кг')
     + '</tr></table>';
   if (out.length) body += h3('Закончились (' + out.length + ')') + tableOut(out);
   if (low.length) body += h3('Заканчиваются (' + low.length + ')') + '<div style="font-size:12px;color:#5B6660">High — запаса ≤ ' + thr.high + ' дн., Medium — ≤ ' + thr.medium + ' дн.</div>' + tableLow(low);
   if (!out.length && !low.length) body += '<p style="font-size:14px;color:#0F6E56;font-weight:700">✓ По позициям High и Medium всё в порядке.</p>';
 
-  const subject = '📦 SoftStock — сводка на ' + ruDate(today) + (out.length || low.length ? ' · внимание: ' + (out.length + low.length) : '');
+  // поставки и контейнеры — в том же письме
+  let lg = null;
+  try { lg = await logisticsSections(); } catch (e) { lg = null; }
+  if (lg) body += '<div style="border-top:2px solid #E4E7E3;margin:22px 0 14px"></div>'
+    + '<div style="font-size:15px;font-weight:700;margin:0 0 10px">Поставки и контейнеры</div>' + lg.tiles + lg.body;
+  const subject = '📦 SoftStock — сводка на ' + ruDate(today) + (out.length || low.length ? ' · остатки: внимание ' + (out.length + low.length) : '')
+    + (lg ? ' · в пути ' + lg.trucks + ' маш.' + (lg.shipments != null ? ' · ' + lg.shipments + ' отпр.' : '') + (lg.late ? ' · просрочено ' + lg.late : '') : '');
   return { subject, html: wrap('Сводка на ' + ruDate(today), body), to: recipients(settings) };
+}
+
+// ── утреннее письмо «Поставки и контейнеры» ──
+function logisticsRecipients(settings) {
+  const raw = settings.logistics_email != null ? settings.logistics_email : 'ceo.softtrade@gmail.com';
+  return String(raw).split(/[,;\s]+/).map(x => x.trim()).filter(x => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x));
+}
+async function buildLogistics() {
+  const { settings } = await loadState();
+  const sec = await logisticsSections();
+  return { subject: sec.subject, html: wrap('Поставки и контейнеры на ' + ruDate(localDate()), sec.tiles + sec.body), to: logisticsRecipients(settings) };
+}
+// блоки «машины в пути» и «контейнеры» — используются в общей утренней сводке
+async function logisticsSections() {
+  const today = localDate(), yesterday = localDate(new Date(Date.now() - 86400000));
+  const daysTo = iso => Math.round((new Date(iso + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000);
+  const whenCell = iso => { if (!iso) return '<span style="color:#8A938E">без даты</span>'; const d = daysTo(iso);
+    return d < 0 ? '<b style="color:#B42318">' + ruDate(iso) + '</b><br><span style="color:#B42318;font-size:11px">просрочено ' + (-d) + ' дн.</span>'
+      : d === 0 ? '<b style="color:#B26B00">' + ruDate(iso) + '</b><br><span style="color:#B26B00;font-size:11px">сегодня</span>'
+      : ruDate(iso) + '<br><span style="color:#8A938E;font-size:11px">через ' + d + ' дн.</span>'; };
+  const [pend, arrived] = await Promise.all([
+    sb('deliveries?select=id,quantity,plate_no,expected_date,products(type),suppliers(name)&status=eq.pending'),
+    sb('deliveries?select=id,quantity,plate_no,products(type),suppliers(name)&status=eq.arrived&arrived_at=gte.' + yesterday + 'T00:00:00')
+  ]);
+  // машины в пути
+  const trucks = {};
+  (pend || []).forEach(d => { const k = (d.plate_no || '— без номера —') + '|' + (d.expected_date || '');
+    const t = (trucks[k] = trucks[k] || { plate: d.plate_no || '— без номера —', date: d.expected_date, sup: new Set(), kg: 0, n: 0, types: {} });
+    t.sup.add(d.suppliers?.name || '—'); t.kg += Number(d.quantity || 0); t.n++; const ty = d.products?.type || '—'; t.types[ty] = (t.types[ty] || 0) + Number(d.quantity || 0); });
+  const tl = Object.values(trucks).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+  const pendKg = tl.reduce((a, t) => a + t.kg, 0), lateT = tl.filter(t => t.date && t.date < today).length;
+  const arrKg = (arrived || []).reduce((a, d) => a + Number(d.quantity || 0), 0);
+  const arrTrucks = new Set((arrived || []).map(d => d.plate_no || '?')).size;
+  // контейнеры
+  let shipments = [], items = [], events = [], shipErr = '';
+  try {
+    [shipments, items, events] = await Promise.all([
+      sb('shipments?select=*&status=in.(ordered,production,shipped,port,customs)'),
+      sb('shipment_items?select=shipment_id,name,qty,unit&order=id'),
+      sb('shipment_events?select=shipment_id,at,status,note,user_name,created_at&created_at=gte.' + yesterday + 'T00:00:00&order=created_at')
+    ]);
+  } catch (e) { shipErr = /shipments/.test(e.message) ? 'раздел «Контейнеры» ещё не включён' : e.message; }
+  const tgt = r => r.eta_final || r.eta || null;
+  const sl = (shipments || []).sort((a, b) => (tgt(a) || '9999').localeCompare(tgt(b) || '9999'));
+  const lateS = sl.filter(r => tgt(r) && tgt(r) < today).length;
+  const SHN = { ordered:'Заказано', production:'Производство', shipped:'В пути', port:'В порту', customs:'Таможня', delivered:'Доставлено', cancelled:'Отменено' };
+  const KND = { container:'Контейнер', truck:'Фура', air:'Авиа', rail:'Ж/д', other:'Отправка' };
+
+  const tile = (l, v, sub, col) => '<td style="padding:10px 12px;background:#F0F2EF;border-radius:6px;width:25%;vertical-align:top"><div style="font-size:10px;color:#5B6660;text-transform:uppercase;letter-spacing:.04em">' + l + '</div><div style="font-size:18px;font-weight:700;margin-top:3px;color:' + (col || '#1C2321') + '">' + v + '</div>' + (sub ? '<div style="font-size:11px;color:#8A938E;margin-top:2px">' + sub + '</div>' : '') + '</td>';
+  const tiles = '<table cellspacing="6" cellpadding="0" style="width:100%;margin:0 -6px 14px"><tr>'
+    + tile('Машин в пути', String(tl.length), kg(pendKg) + ' кг') + tile('Просрочено машин', String(lateT), 'плановая дата прошла', lateT ? '#B42318' : '')
+    + tile('Получено вчера–сегодня', String(arrTrucks), kg(arrKg) + ' кг') + tile('Контейнеры активные', shipErr ? '—' : String(sl.length), lateS ? '<b style="color:#B42318">просрочено ' + lateS + '</b>' : '')
+    + '</tr></table>';
+
+  let body = h3('🚚 Машины в пути (' + tl.length + ')');
+  body += tl.length ? '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin:6px 0 18px"><tr><th style="' + TH + '">Машина</th><th style="' + TH + '">Поставщик</th><th style="' + TH + '">Ожидается</th><th style="' + TH + '">Что везёт</th><th style="' + TH + ';text-align:right">Кг</th></tr>'
+    + tl.map(t => '<tr><td style="' + TD + ';font-weight:700">' + esc(t.plate) + '</td><td style="' + TD + '">' + esc([...t.sup].join(', ')) + '</td><td style="' + TD + ';white-space:nowrap">' + whenCell(t.date) + '</td><td style="' + TD + ';font-size:12px;color:#5B6660">'
+      + Object.entries(t.types).sort((a, b) => b[1] - a[1]).map(([k, v]) => esc(k) + ' ' + kg(v)).join('<br>') + '</td><td style="' + TD + ';text-align:right;font-weight:700;white-space:nowrap">' + kg(t.kg) + '</td></tr>').join('')
+    + '</table>' : '<p style="font-size:13px;color:#5B6660">Машин в пути нет.</p>';
+
+  body += h3('🚢 Контейнеры и отправки (' + (shipErr ? '—' : sl.length) + ')');
+  if (shipErr) body += '<p style="font-size:13px;color:#5B6660">' + esc(shipErr) + '</p>';
+  else if (!sl.length) body += '<p style="font-size:13px;color:#5B6660">Активных отправок нет.</p>';
+  else body += '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin:6px 0 18px"><tr><th style="' + TH + '">Номер</th><th style="' + TH + '">Что везём</th><th style="' + TH + '">Статус</th><th style="' + TH + '">Прибытие</th></tr>'
+    + sl.map(r => { const its = (items || []).filter(i => i.shipment_id === r.id);
+      return '<tr><td style="' + TD + '"><b>' + esc(r.ref_no || '—') + '</b><br><span style="font-size:11px;color:#8A938E">' + esc(KND[r.kind] || '') + ' ' + esc(r.container_type || '') + '</span></td>'
+        + '<td style="' + TD + '">' + esc(r.title || '') + '<br><span style="font-size:11px;color:#5B6660">' + esc((r.sender || '') + (r.origin || r.destination ? ' · ' + (r.origin || '?') + ' → ' + (r.destination || '?') : '')) + '</span>'
+        + (its.length ? '<br><span style="font-size:11px;color:#8A938E">' + its.slice(0, 4).map(i => esc(i.name) + (i.qty != null ? ' ' + kg(i.qty) + ' ' + esc(i.unit || '') : '')).join('; ') + (its.length > 4 ? ' …' : '') + '</span>' : '') + '</td>'
+        + '<td style="' + TD + ';white-space:nowrap"><b>' + esc(SHN[r.status] || r.status) + '</b></td><td style="' + TD + ';white-space:nowrap">' + whenCell(tgt(r)) + (r.eta && r.eta_final && r.eta !== r.eta_final ? '<br><span style="font-size:11px;color:#8A938E">порт ' + ruDate(r.eta) + '</span>' : '') + '</td></tr>'; }).join('')
+    + '</table>';
+
+  const evs = (events || []).filter(e => e.status || e.note);
+  if (evs.length) {
+    const byId = {}; (shipments || []).forEach(r => { byId[r.id] = r; });
+    body += h3('Изменения за сутки') + '<ul style="margin:4px 0 14px 18px;padding:0;font-size:13px">' + evs.map(e => '<li>' + esc(byId[e.shipment_id]?.ref_no || ('#' + e.shipment_id)) + ': '
+      + (e.status ? '<b>' + esc(SHN[e.status] || e.status) + '</b> ' : '') + esc(e.note || '') + ' <span style="color:#8A938E">· ' + ruDate(e.at) + (e.user_name ? ' · ' + esc(e.user_name) : '') + '</span></li>').join('') + '</ul>';
+  }
+  const subject = '🚚 Поставки и контейнеры — ' + ruDate(today) + ' · в пути ' + tl.length + ' маш.' + (shipErr ? '' : ' · ' + sl.length + ' отпр.') + (lateT + lateS ? ' · просрочено ' + (lateT + lateS) : '');
+  return { subject, tiles, body, trucks: tl.length, shipments: shipErr ? null : sl.length, late: lateT + lateS };
 }
 
 // ── уведомление о смене статуса: контейнер (shipments) или фура (deliveries) ──
@@ -334,14 +433,26 @@ exports.handler = async (event) => {
       const r = await runAlerts(true);
       return reply(200, { success: true, sent: r.html ? 'alerts' : 'nothing-new', newOut: r.newOut, newLow: r.newLow });
     }
+    if (mode === 'logistics') {
+      const l = await buildLogistics();
+      await sendMail(l.to, l.subject, l.html);
+      return reply(200, { success: true, sent: 'logistics', to: l.to });
+    }
+    if (mode === 'logistics-preview') {
+      const l = await buildLogistics();
+      return reply(200, { success: true, html: l.html, subject: l.subject, to: l.to, smtp: !!(SMTP_USER && SMTP_PASS) });
+    }
     if (mode === 'auto') {
       const { settings } = await loadState();
-      const done = [];
-      if (settings.alerts_enabled !== 'false') { const r = await runAlerts(true); if (r.html) done.push('alerts'); }
-      if (settings.summary_enabled !== 'false' && localHour() === SUMMARY_HOUR) {
-        const s = await buildSummary(); await sendMail(s.to, s.subject, s.html); done.push('summary');
+      const done = [], errors = [];
+      // каждое письмо отдельно: ошибка одного не мешает остальным
+      const run = async (name, fn) => { try { if (await fn()) done.push(name); } catch (e) { errors.push(name + ': ' + e.message); } };
+      if (settings.alerts_enabled !== 'false') await run('alerts', async () => (await runAlerts(true)).html);
+      if (localHour() === SUMMARY_HOUR) {
+        if (settings.summary_enabled !== 'false') await run('summary', async () => { const s = await buildSummary(); await sendMail(s.to, s.subject, s.html); return true; });
+        if (settings.logistics_enabled === 'true') await run('logistics', async () => { const l = await buildLogistics(); await sendMail(l.to, l.subject, l.html); return true; });
       }
-      return reply(200, { success: true, sent: done });
+      return reply(200, { success: errors.length === 0, sent: done, errors });
     }
     return reply(400, { success: false, error: 'Неизвестный режим: ' + mode });
   } catch (e) {
