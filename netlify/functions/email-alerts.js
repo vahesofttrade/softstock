@@ -27,6 +27,7 @@ const RESEND_KEY   = process.env.RESEND_API_KEY || '';
 const EMAIL_FROM   = process.env.EMAIL_FROM || 'SoftStock <onboarding@resend.dev>';
 const SUMMARY_HOUR = parseInt(process.env.SUMMARY_HOUR || '9', 10);
 const TZ           = 'Asia/Yerevan';
+let FORCE_TRENDS = false;   // кнопка «Предпросмотр» показывает блок динамики в любой день
 const SITE_URL     = process.env.URL || 'https://sensational-gingersnap-05c5cd.netlify.app';
 
 const cors = {
@@ -239,6 +240,11 @@ async function buildSummary() {
   if (low.length) body += h3('Заканчиваются (' + low.length + ')') + '<div style="font-size:12px;color:#5B6660">High — запаса ≤ ' + thr.high + ' дн., Medium — ≤ ' + thr.medium + ' дн.</div>' + tableLow(low);
   if (!out.length && !low.length) body += '<p style="font-size:14px;color:#0F6E56;font-weight:700">✓ По позициям High и Medium всё в порядке.</p>';
 
+  // по понедельникам — подтверждённые изменения расхода
+  let tr = null;
+  const wd = new Intl.DateTimeFormat('en-US', { timeZone: TZ, weekday: 'short' }).format(new Date());
+  if (wd === 'Mon' || FORCE_TRENDS) { try { tr = await trendSections(settings); } catch (e) { tr = null; } }
+  if (tr) body += '<div style="border-top:2px solid #E4E7E3;margin:22px 0 14px"></div><div style="font-size:15px;font-weight:700;margin:0 0 6px">⇅ Динамика расхода' + (tr.n ? ' — подтверждено ' + tr.n : '') + '</div>' + tr.html;
   // поставки и контейнеры — в том же письме
   let lg = null;
   try { lg = await logisticsSections(); } catch (e) { lg = null; }
@@ -247,6 +253,65 @@ async function buildSummary() {
   const subject = '📦 SoftStock — сводка на ' + ruDate(today) + (out.length || low.length ? ' · остатки: внимание ' + (out.length + low.length) : '')
     + (lg ? ' · в пути ' + lg.trucks + ' маш.' + (lg.shipments != null ? ' · ' + lg.shipments + ' отпр.' : '') + (lg.late ? ' · просрочено ' + lg.late : '') : '');
   return { subject, html: wrap('Сводка на ' + ruDate(today), body), to: recipients(settings) };
+}
+
+// ── динамика расхода: подтверждённые изменения (та же логика, что в отчёте «Динамика расхода») ──
+async function trendSections(settings) {
+  // Реперные точки: расход накопительно с 1-го числа на 5-е, 10-е, 15-е, 20-е, 25-е. Сравниваем одинаковые точки разных месяцев.
+  const pct = Number(settings.trend_pct || 25) / 100, minKg = Number(settings.trend_min_kg || 1000);
+  const t = new Date(localDate() + 'T00:00:00');
+  const ym = (y, m) => { const d = new Date(y, m, 1); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); };
+  const Y = t.getFullYear(), M = t.getMonth();
+  const cur = ym(Y, M), last = ym(Y, M - 1), b1 = ym(Y, M - 2), b2 = ym(Y, M - 3);
+  const CP = [5, 10, 15, 20, 25]; let k = -1; CP.forEach((d, i) => { if (t.getDate() >= d) k = i; });
+  if (k < 0) return null;   // до 5-го числа точки текущего месяца ещё нет
+  const from = b2 + '-01';
+  const rows = await sb('rpc/softstock_monthly_consumption', { method: 'POST', body: JSON.stringify({ p_from: from }), headers: { Prefer: '' } });
+  const m = {};
+  (rows || []).forEach(r => { (m[r.product_id] = m[r.product_id] || {})[String(r.month).slice(0, 7)] = { full: Number(r.qty) || 0, cp: [r.c5, r.c10, r.c15, r.c20, r.c25].map(x => Number(x) || 0) }; });
+  const ids = Object.keys(m);
+  if (!ids.length) return null;
+  const prods = await sb('products?select=id,name,type,width_cm,ply,gsm,manual_monthly_rate&id=in.(' + ids.join(',') + ')');
+  const out = [];
+  (prods || []).forEach(p => { const v = m[p.id] || {}, F = key => (v[key] || {}).full || 0, C = key => ((v[key] || {}).cp || [])[k] || 0;
+    const baseF = (F(b1) + F(b2)) / 2, lastF = F(last), baseK = (C(b1) + C(b2)) / 2, lastK = C(last), curK = C(cur);
+    if (Math.max(baseF, lastF, curK) < minKg || !(baseF > 0) || !(baseK > 0)) return;
+    const dl = (lastF - baseF) / baseF, dc = (curK - baseK) / baseK, dm = lastK > 0 ? (curK - lastK) / lastK : null;
+    if ((dl >= pct && dc >= pct) || (dl <= -pct && dc <= -pct)) out.push({ p, baseF, lastF, baseK, curK, dl, dc, dm, up: dl > 0 }); });
+  if (!out.length) return { html: '<p style="font-size:13px;color:#5B6660">Подтверждённых изменений расхода нет.</p>', n: 0 };
+  out.sort((a, b) => (b.up - a.up) || Math.abs(b.dc) - Math.abs(a.dc));
+  const mon = key => ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'][Number(key.slice(5)) - 1];
+  const pc = x => x == null ? '—' : (x >= 0 ? '+' : '−') + Math.abs(Math.round(x * 100)) + '%';
+  const R = ';text-align:right;white-space:nowrap', day = CP[k];
+  const html = '<div style="font-size:12px;color:#5B6660;margin-bottom:4px">Реперная точка — <b>' + day + '-е число</b> (расход с 1-го по ' + day + '-е). База — среднее ' + mon(b2) + '–' + mon(b1) + '. Изменение подтверждено, если и ' + mon(last) + ' целиком, и ' + mon(cur) + ' по ' + day + '-е отличаются от базы в одну сторону на ' + Math.round(pct * 100) + '% и больше. Крупные разовые отгрузки исключены.</div>'
+    + '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%;margin:4px 0 16px"><tr><th style="' + TH + '">Товар</th><th style="' + TH + R + '">База, мес.</th><th style="' + TH + R + '">' + mon(last) + '</th><th style="' + TH + R + '">База по ' + day + '-е</th><th style="' + TH + R + '">' + mon(cur) + ' по ' + day + '-е</th><th style="' + TH + '">Изменение</th></tr>'
+    + out.map(o => '<tr><td style="' + TD + '">' + label(o.p) + '<br><span style="color:#8A938E">' + esc(o.p.type) + '</span></td><td style="' + TD + R + '">' + kg(o.baseF) + '</td><td style="' + TD + R + '">' + kg(o.lastF) + '</td><td style="' + TD + R + '">' + kg(o.baseK) + '</td><td style="' + TD + R + '">' + kg(o.curK) + '</td>'
+      + '<td style="' + TD + ';white-space:nowrap;font-weight:700;color:' + (o.up ? '#1d4ed8' : '#9A5F12') + '">' + (o.up ? '▲ ' : '▼ ') + pc(o.dl) + ' / ' + pc(o.dc) + '<br><span style="font-weight:400;color:#8A938E;font-size:11px">к ' + mon(last) + ' на ту же дату ' + pc(o.dm) + '</span></td></tr>').join('') + '</table>';
+  return { html, n: out.length };
+}
+
+// ── крупные разовые отгрузки: письмо (раз в час проверка, без повторов) ──
+async function runLargeMoves(send = true) {
+  const since = localDate(new Date(Date.now() - 3 * 86400000));
+  const moves = await sb('rpc/softstock_large_moves', { method: 'POST', body: JSON.stringify({ p_since: since }), headers: { Prefer: '' } });
+  if (!moves || !moves.length) return { n: 0 };
+  const done = await sb('large_move_alerts?select=product_id,d&d=gte.' + since);
+  const seen = new Set((done || []).map(r => r.product_id + '|' + r.d));
+  const fresh = moves.filter(x => !seen.has(x.product_id + '|' + x.d));
+  if (!fresh.length) return { n: 0 };
+  const prods = await sb('products?select=id,name,type,width_cm,ply,gsm&id=in.(' + [...new Set(fresh.map(x => x.product_id))].join(',') + ')');
+  const P = {}; (prods || []).forEach(p => { P[p.id] = p; });
+  const subject = '📦 Крупная разовая отгрузка: ' + (fresh.length === 1 ? label(P[fresh[0].product_id] || { name: '?' }).replace(/&amp;/g, '&') + ' — ' + kg(fresh[0].qty) + ' кг' : fresh.length + ' поз.');
+  const html = wrap('Крупная разовая отгрузка — вне статистики',
+    '<p style="font-size:13px;margin:0 0 10px">Списано заметно больше обычного. Эти списания <b>не учитываются</b> в динамике расхода, чтобы не искажать тренды. Если это не разовый заказ, а новый постоянный уровень — проверьте норму в карточке товара.</p>'
+    + '<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;width:100%"><tr><th style="' + TH + '">Дата</th><th style="' + TH + '">Товар</th><th style="' + TH + ';text-align:right">Списано</th><th style="' + TH + ';text-align:right">Обычно за раз</th><th style="' + TH + ';text-align:right">Обычно в месяц</th></tr>'
+    + fresh.map(x => { const p = P[x.product_id] || { name: '?' }; return '<tr><td style="' + TD + '">' + ruDate(x.d) + '</td><td style="' + TD + '">' + label(p) + '<br><span style="color:#8A938E">' + esc(p.type || '') + '</span></td><td style="' + TD + ';text-align:right;font-weight:700">' + kg(x.qty) + ' кг</td><td style="' + TD + ';text-align:right">' + kg(x.typical_day) + ' кг</td><td style="' + TD + ';text-align:right">' + kg(x.base_monthly) + ' кг</td></tr>'; }).join('') + '</table>');
+  if (send) {
+    const { settings } = await loadState();
+    await sendMail(recipients(settings), subject, html);
+    await sb('large_move_alerts?on_conflict=product_id,d', { method: 'POST', body: JSON.stringify(fresh.map(x => ({ product_id: x.product_id, d: x.d, qty: x.qty }))), headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' } });
+  }
+  return { n: fresh.length, html, subject };
 }
 
 // ── утреннее письмо «Поставки и контейнеры» ──
@@ -539,6 +604,7 @@ async function buildDeliveryStatus(ids, actor) {
 }
 
 exports.handler = async (event) => {
+  FORCE_TRENDS = false;
   if (event.httpMethod === 'OPTIONS') return { statusCode: 204, headers: cors, body: '' };
   if (event.httpMethod !== 'POST') return reply(405, { success: false, error: 'Method not allowed' });
   if (!SERVICE_KEY) return reply(500, { success: false, error: 'SUPABASE_SERVICE_ROLE_KEY не задан в Netlify (Environment variables).' });
@@ -573,6 +639,7 @@ exports.handler = async (event) => {
       return reply(200, { success: true, sent: 'test', to });
     }
     if (mode === 'preview') {
+      FORCE_TRENDS = true;
       const [summary, alerts] = await Promise.all([buildSummary(), runAlerts(false)]);
       return reply(200, { success: true, summary: summary.html, summarySubject: summary.subject,
         alerts: alerts.html, alertsSubject: alerts.subject, newOut: alerts.newOut, newLow: alerts.newLow,
@@ -606,6 +673,7 @@ exports.handler = async (event) => {
       // каждое письмо отдельно: ошибка одного не мешает остальным
       const run = async (name, fn) => { try { if (await fn()) done.push(name); } catch (e) { errors.push(name + ': ' + e.message); } };
       if (settings.alerts_enabled !== 'false') await run('alerts', async () => (await runAlerts(true)).html);
+      if (settings.large_notify !== 'false') await run('large', async () => (await runLargeMoves(true)).n > 0);
       if (localHour() === SUMMARY_HOUR) {
         if (settings.summary_enabled !== 'false') await run('summary', async () => { const s = await buildSummary(); await sendMail(s.to, s.subject, s.html, await summaryAttachments()); return true; });
         if (settings.logistics_enabled === 'true') await run('logistics', async () => { const l = await buildLogistics(); await sendMail(l.to, l.subject, l.html); return true; });
