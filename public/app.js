@@ -3551,8 +3551,8 @@ async function saveAlertSettings(){
 
 async function notifyCall(mode){
   const err = document.getElementById('svcError'), st = document.getElementById('svcStatus'), pv = document.getElementById('svcPreview');
-  err.textContent = ''; st.textContent = mode==='preview' ? 'Собираю письмо…' : 'Отправляю…';
-  if(mode!=='preview') pv.classList.add('hidden');
+  err.textContent = ''; st.textContent = /preview/.test(mode) ? 'Собираю письмо…' : 'Отправляю…';
+  if(!/preview/.test(mode)) pv.classList.add('hidden');
   try{
     const { data: { session } } = await sb.auth.getSession();
     const res = await fetch('/.netlify/functions/email-alerts', {
@@ -3567,6 +3567,15 @@ async function notifyCall(mode){
     if(mode==='test') toast('Тестовое письмо отправлено ✓ '+to);
     else if(mode==='summary') toast('Сводка отправлена ✓ '+to);
     else if(mode==='alerts') toast(j.sent==='alerts' ? `Отправлено: закончились ${j.newOut}, заканчиваются ${j.newLow}` : 'Новых предупреждений нет — всё уже отправлялось или в порядке');
+    else if(mode==='logistics') toast('Письмо «Поставки и контейнеры» отправлено ✓ '+to);
+    else if(mode==='logistics-preview'){
+      const frame = html=>`<iframe sandbox="allow-same-origin" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+24)+'px'}catch(e){}" style="width:100%;border:1px solid var(--border);border-radius:6px;background:#fff;height:420px;display:block" srcdoc="${escHtml(html)}"></iframe>`;
+      const ownerOnly = !j.smtp && (j.to||[]).some(a=>a.toLowerCase()!=='import.softtrade@gmail.com');
+      pv.innerHTML = `<span class="pc-note" style="margin:0">Получатели: ${escHtml((j.to||[]).join(', ')||'—')} · отправка через ${j.smtp?'Gmail (SMTP)':'Resend'}</span>`
+        + (ownerOnly ? `\n<b style="color:var(--red)">Через Resend без своего домена письмо дойдёт только на import.softtrade@gmail.com. Чтобы отправлять на другие адреса — подключите Gmail (SMTP_USER / SMTP_PASS), см. инструкцию.</b>` : '')
+        + `\n\n<h4>«${escHtml(j.subject)}»</h4>${frame(j.html)}`;
+      pv.classList.remove('hidden');
+    }
     else if(mode==='preview'){
       // письма собирает наш сервер (все значения экранированы); показываем в изолированном iframe
       const frame = html=>`<iframe sandbox="allow-same-origin" loading="eager" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+24)+'px'}catch(e){}" style="width:100%;border:1px solid var(--border);border-radius:6px;background:#fff;height:420px;display:block" srcdoc="${escHtml(html)}"></iframe>`;
