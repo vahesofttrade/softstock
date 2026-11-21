@@ -4,6 +4,10 @@
 
 [functions]
   directory = "netlify/functions"
+  node_bundler = "esbuild"
+  # pdfkit читает свои файлы с диска — подключаем модуль целиком; шрифты DejaVu для PDF
+  external_node_modules = ["pdfkit", "nodemailer"]
+  included_files = ["netlify/functions/fonts/**"]
 
 # Уведомления на почту: проверка каждый час, сводка — в 9:00 по Еревану
 [functions."email-cron"]

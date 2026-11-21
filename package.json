@@ -1,0 +1,9 @@
+{
+  "name": "softstock",
+  "private": true,
+  "description": "SoftStock — зависимости для Netlify Functions (PDF сводки, отправка почты)",
+  "dependencies": {
+    "pdfkit": "^0.15.2",
+    "nodemailer": "^6.9.16"
+  }
+}
