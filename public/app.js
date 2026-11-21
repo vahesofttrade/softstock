@@ -3551,7 +3551,7 @@ async function saveAlertSettings(){
 
 async function notifyCall(mode){
   const err = document.getElementById('svcError'), st = document.getElementById('svcStatus'), pv = document.getElementById('svcPreview');
-  err.textContent = ''; st.textContent = /preview/.test(mode) ? 'Собираю письмо…' : 'Отправляю…';
+  err.textContent = ''; st.textContent = /preview/.test(mode) ? 'Собираю письмо…' : mode==='summary-pdf' ? 'Готовлю PDF…' : 'Отправляю…';
   if(!/preview/.test(mode)) pv.classList.add('hidden');
   try{
     const { data: { session } } = await sb.auth.getSession();
@@ -3567,6 +3567,13 @@ async function notifyCall(mode){
     if(mode==='test') toast('Тестовое письмо отправлено ✓ '+to);
     else if(mode==='summary') toast('Сводка отправлена ✓ '+to);
     else if(mode==='alerts') toast(j.sent==='alerts' ? `Отправлено: закончились ${j.newOut}, заканчиваются ${j.newLow}` : 'Новых предупреждений нет — всё уже отправлялось или в порядке');
+    else if(mode==='summary-pdf'){
+      const bin = atob(j.pdf), arr = new Uint8Array(bin.length); for(let i=0;i<bin.length;i++) arr[i] = bin.charCodeAt(i);
+      const url = URL.createObjectURL(new Blob([arr], {type:'application/pdf'}));
+      const a = document.createElement('a'); a.href = url; a.download = j.filename || 'SoftStock_svodka.pdf'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(()=>URL.revokeObjectURL(url), 5000);
+      toast('PDF сводки скачан ✓');
+    }
     else if(mode==='logistics') toast('Письмо «Поставки и контейнеры» отправлено ✓ '+to);
     else if(mode==='logistics-preview'){
       const frame = html=>`<iframe sandbox="allow-same-origin" onload="try{this.style.height=(this.contentDocument.documentElement.scrollHeight+24)+'px'}catch(e){}" style="width:100%;border:1px solid var(--border);border-radius:6px;background:#fff;height:420px;display:block" srcdoc="${escHtml(html)}"></iframe>`;
