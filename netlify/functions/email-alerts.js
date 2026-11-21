@@ -78,14 +78,15 @@ function recipients(settings) {
 // письма уходят на ЛЮБЫЕ адреса. Иначе — через Resend (без своего домена только на адрес владельца Resend).
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = (process.env.SMTP_PASS || '').replace(/\s+/g, '');
-async function sendMail(to, subject, html) {
+async function sendMail(to, subject, html, attachments) {
   if (!to.length) throw new Error('не указан адрес получателя (страница «Сервис»)');
   if (SMTP_USER && SMTP_PASS) {
     let nodemailer;
     try { nodemailer = require('nodemailer'); } catch (e) { throw new Error('для отправки через Gmail нужен файл package.json в корне репозитория (с nodemailer) и передеплой'); }
     const tr = nodemailer.createTransport({ host: process.env.SMTP_HOST || 'smtp.gmail.com', port: Number(process.env.SMTP_PORT || 465), secure: Number(process.env.SMTP_PORT || 465) === 465, auth: { user: SMTP_USER, pass: SMTP_PASS } });
     try {
-      const info = await tr.sendMail({ from: '"SoftStock" <' + SMTP_USER + '>', to: to.join(', '), subject, html });
+      const info = await tr.sendMail({ from: '"SoftStock" <' + SMTP_USER + '>', to: to.join(', '), subject, html,
+        attachments: (attachments || []).map(a => ({ filename: a.filename, content: Buffer.from(a.content, 'base64') })) });
       return info.messageId;
     } catch (e) { throw new Error('Почта (SMTP): ' + (e.response || e.message)); }
   }
@@ -93,7 +94,7 @@ async function sendMail(to, subject, html) {
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: { Authorization: 'Bearer ' + RESEND_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: EMAIL_FROM, to, subject, html })
+    body: JSON.stringify({ from: EMAIL_FROM, to, subject, html, ...(attachments && attachments.length ? { attachments } : {}) })
   });
   const j = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error('Resend: ' + (j.message || j.error || ('HTTP ' + res.status)));
@@ -327,6 +328,156 @@ async function logisticsSections() {
   return { subject, tiles, body, trucks: tl.length, shipments: shipErr ? null : sl.length, late: lateT + lateS };
 }
 
+// ── PDF утренней сводки (pdfkit + шрифт DejaVu с кириллицей и армянским) ──
+const path = require('path');
+const fs = require('fs');
+function findFont(name) {
+  const c = [path.join(__dirname, 'fonts', name), path.join(__dirname, 'netlify', 'functions', 'fonts', name), path.join(process.cwd(), 'netlify', 'functions', 'fonts', name), path.join('/var/task', 'netlify', 'functions', 'fonts', name), path.join(__dirname, '..', 'fonts', name)];
+  return c.find(f => { try { return fs.existsSync(f); } catch (e) { return false; } });
+}
+async function buildSummaryPdf() {
+  let PDFDocument;
+  try { PDFDocument = require('pdfkit'); } catch (e) { throw new Error('для PDF нужен package.json (pdfkit) в корне репозитория и передеплой'); }
+  const fR = findFont('DejaVuSans.ttf'), fB = findFont('DejaVuSans-Bold.ttf');
+  if (!fR || !fB) throw new Error('не найдены шрифты netlify/functions/fonts/DejaVuSans*.ttf');
+
+  // данные — те же, что в письме
+  const { rows, thr } = await loadState();
+  const today = localDate(), yesterday = localDate(new Date(Date.now() - 86400000));
+  const [ylog, pend, res, arrived] = await Promise.all([
+    sb('stock_log?select=operation,quantity&date=eq.' + yesterday),
+    sb('deliveries?select=quantity,plate_no,expected_date,products(type),suppliers(name)&status=eq.pending'),
+    sb('reservations?select=quantity&status=eq.reserved'),
+    sb('deliveries?select=quantity,plate_no&status=eq.arrived&arrived_at=gte.' + yesterday + 'T00:00:00')
+  ]);
+  let shipments = [], items = [], events = [];
+  try {
+    [shipments, items, events] = await Promise.all([
+      sb('shipments?select=*&status=in.(ordered,production,shipped,port,customs)'),
+      sb('shipment_items?select=shipment_id,name,qty,unit&order=id'),
+      sb('shipment_events?select=shipment_id,at,status,note,user_name,created_at&created_at=gte.' + yesterday + 'T00:00:00&order=created_at')
+    ]);
+  } catch (e) { shipments = null; }
+  const total = rows.reduce((a, p) => a + Math.max(p.balance, 0), 0);
+  const yin = (ylog || []).filter(r => r.operation === 'add').reduce((a, r) => a + Number(r.quantity), 0);
+  const yout = (ylog || []).filter(r => r.operation === 'deduct').reduce((a, r) => a + Number(r.quantity), 0);
+  const out = rows.filter(p => p.level === 'out').sort(byPrio);
+  const low = rows.filter(p => p.level === 'low').sort((a, b) => a.days - b.days);
+  const trucks = {};
+  (pend || []).forEach(d => { const k = (d.plate_no || '— без номера —') + '|' + (d.expected_date || '');
+    const t = (trucks[k] = trucks[k] || { plate: d.plate_no || '— без номера —', date: d.expected_date, sup: new Set(), kg: 0, types: {} });
+    t.sup.add(d.suppliers?.name || '—'); t.kg += Number(d.quantity || 0); const ty = d.products?.type || '—'; t.types[ty] = (t.types[ty] || 0) + Number(d.quantity || 0); });
+  const tl = Object.values(trucks).sort((a, b) => (a.date || '9999').localeCompare(b.date || '9999'));
+  const tgt = r => r.eta_final || r.eta || null;
+  const sl = (shipments || []).sort((a, b) => (tgt(a) || '9999').localeCompare(tgt(b) || '9999'));
+  const daysTo = iso => Math.round((new Date(iso + 'T00:00:00') - new Date(today + 'T00:00:00')) / 86400000);
+  const when = iso => { if (!iso) return { t: 'без даты', c: '#8A938E' }; const d = daysTo(iso);
+    return d < 0 ? { t: ruDate(iso) + '\nпросрочено ' + (-d) + ' дн.', c: '#B42318', b: true } : d === 0 ? { t: ruDate(iso) + '\nсегодня', c: '#B26B00', b: true } : { t: ruDate(iso) + '\nчерез ' + d + ' дн.' }; };
+  const SHN = { ordered:'Заказано', production:'Производство', shipped:'В пути', port:'В порту', customs:'Таможня', delivered:'Доставлено', cancelled:'Отменено' };
+  const KND = { container:'Контейнер', truck:'Фура', air:'Авиа', rail:'Ж/д', other:'Отправка' };
+  const kgs = n => Math.round(Number(n) || 0).toLocaleString('ru-RU').replace(/ /g, ' ');
+  const fmtP = p => p.name + ' · ' + (p.width_cm ?? '—') + 'cm·' + p.ply + 'ply·' + (p.gsm ?? '—') + 'gsm';
+
+  const doc = new PDFDocument({ size: 'A4', margins: { top: 40, bottom: 44, left: 36, right: 36 }, bufferPages: true, info: { Title: 'SoftStock — сводка ' + ruDate(today), Author: 'SoftStock' } });
+  doc.registerFont('R', fR); doc.registerFont('B', fB); doc.font('R');
+  const chunks = []; doc.on('data', c => chunks.push(c));
+  const done = new Promise(r => doc.on('end', r));
+  const L = doc.page.margins.left, W = doc.page.width - L - doc.page.margins.right;
+  const bottom = () => doc.page.height - doc.page.margins.bottom;
+  const BRAND = '#0F6E56';
+  const ensure = h => { if (doc.y + h > bottom()) doc.addPage(); };
+  const h2 = t => { ensure(40); doc.moveDown(0.6); doc.font('B').fontSize(12.5).fillColor('#1C2321').text(t, L, doc.y); doc.moveDown(0.25); };
+  const note = t => { doc.font('R').fontSize(9).fillColor('#5B6660').text(t, L, doc.y, { width: W }); doc.moveDown(0.2); };
+  // таблица: cols [{h, w(доля), align}], rows — массив массивов ячеек; ячейка = строка или {t, c, b}
+  function table(cols, data) {
+    const ws = cols.map(c => c.w * W), pad = 4, fs = 8.5;
+    const header = () => { const y = doc.y; doc.rect(L, y, W, 16).fill('#EEF1EE'); let x = L;
+      doc.font('B').fontSize(7.5).fillColor('#5B6660');
+      cols.forEach((c, i) => { doc.text(c.h.toUpperCase(), x + pad, y + 4.5, { width: ws[i] - pad * 2, align: c.align || 'left', lineBreak: false }); x += ws[i]; });
+      doc.y = y + 16; };
+    ensure(34); header();
+    data.forEach((row, ri) => {
+      const cells = row.map(c => typeof c === 'object' && c !== null ? c : { t: String(c ?? '') });
+      const hs = cells.map((c, i) => { doc.font(c.b ? 'B' : 'R').fontSize(c.s || fs); return doc.heightOfString(c.t, { width: ws[i] - pad * 2 }); });
+      const h = Math.max(...hs) + pad * 2;
+      if (doc.y + h > bottom()) { doc.addPage(); header(); }
+      const y = doc.y;
+      if (ri % 2 === 1) doc.rect(L, y, W, h).fill('#FAFBFA');
+      let x = L;
+      cells.forEach((c, i) => { doc.font(c.b ? 'B' : 'R').fontSize(c.s || fs).fillColor(c.c || '#1C2321')
+        .text(c.t, x + pad, y + pad, { width: ws[i] - pad * 2, align: cols[i].align || 'left' }); x += ws[i]; });
+      doc.moveTo(L, y + h).lineTo(L + W, y + h).lineWidth(0.5).strokeColor('#E4E7E3').stroke();
+      doc.y = y + h;
+    });
+    doc.moveDown(0.4);
+  }
+  function tiles(list) {
+    ensure(52); const y = doc.y, gap = 6, w = (W - gap * (list.length - 1)) / list.length;
+    list.forEach((t, i) => { const x = L + i * (w + gap);
+      doc.roundedRect(x, y, w, 46, 4).fill('#F0F2EF');
+      doc.font('R').fontSize(7).fillColor('#5B6660').text(t[0].toUpperCase(), x + 7, y + 6, { width: w - 14, lineBreak: false });
+      let fsz = 13; doc.font('B'); while (fsz > 8 && doc.fontSize(fsz).widthOfString(t[1]) > w - 14) fsz -= 0.5;
+      doc.fontSize(fsz).fillColor(t[3] || '#1C2321').text(t[1], x + 7, y + 16 + (13 - fsz) / 2, { width: w - 14, lineBreak: false });
+      doc.font('R').fontSize(7.5).fillColor(t[3] && t[2] ? t[3] : '#8A938E').text(t[2] || '', x + 7, y + 33, { width: w - 14, lineBreak: false }); });
+    doc.y = y + 54;
+  }
+
+  // шапка
+  doc.font('B').fontSize(18).fillColor('#1C2321').text('Soft', L, 40, { continued: true }).fillColor(BRAND).text('Stock');
+  doc.font('B').fontSize(13).fillColor('#1C2321').text('Сводка на ' + ruDate(today));
+  doc.font('R').fontSize(8.5).fillColor('#8A938E').text('Сформировано ' + new Date().toLocaleString('ru-RU', { timeZone: TZ }));
+  doc.moveDown(0.6);
+  const pendKg = tl.reduce((a, t) => a + t.kg, 0), lateT = tl.filter(t => t.date && t.date < today).length;
+  tiles([['На складе', kgs(total) + ' кг', (total / 1000).toFixed(1).replace('.', ',') + ' т'], ['Вчера', '+' + kgs(yin) + ' / −' + kgs(yout), 'приход / расход, кг'],
+         ['Резервы', String((res || []).length), kgs((res || []).reduce((a, r) => a + Number(r.quantity), 0)) + ' кг'], ['Машин в пути', String(tl.length), kgs(pendKg) + ' кг' + (lateT ? ' · просрочено ' + lateT : ''), lateT ? '#B42318' : null]]);
+
+  h2('Закончились (' + out.length + ')');
+  if (out.length) table([{ h: 'Товар', w: .46 }, { h: 'Тип', w: .16 }, { h: 'Приоритет', w: .12 }, { h: 'В пути', w: .26 }],
+    out.map(p => [fmtP(p), p.type, { t: p.priority === 'high' ? 'High' : 'Medium', c: p.priority === 'high' ? '#B42318' : '#B26B00', b: true },
+      Number(p.pending_kg) > 0 ? kgs(p.pending_kg) + ' кг' + (p.next_eta ? ' (≈' + ruDate(p.next_eta) + ')' : '') : { t: 'нет', c: '#B42318' }]));
+  else note('Нет закончившихся позиций High / Medium.');
+
+  h2('Заканчиваются (' + low.length + ')');
+  note('High — запаса ≤ ' + thr.high + ' дн., Medium — ≤ ' + thr.medium + ' дн.');
+  if (low.length) table([{ h: 'Товар', w: .38 }, { h: 'Тип', w: .14 }, { h: 'Остаток', w: .12, align: 'right' }, { h: 'Хватит', w: .1, align: 'right' }, { h: 'Кг/день', w: .11, align: 'right' }, { h: 'В пути', w: .15 }],
+    low.map(p => [fmtP(p), p.type, kgs(p.balance) + ' кг', { t: '~' + p.days + ' дн.', b: true, c: p.days <= 7 ? '#B42318' : '#B26B00' }, kgs(p.rate) + ' кг',
+      Number(p.pending_kg) > 0 ? kgs(p.pending_kg) + ' кг' + (p.next_eta ? '\n≈' + ruDate(p.next_eta) : '') : { t: 'нет', c: '#B42318' }]));
+  else note('Всё в порядке.');
+
+  h2('Машины в пути (' + tl.length + ')');
+  if (tl.length) table([{ h: 'Машина', w: .26 }, { h: 'Поставщик', w: .17 }, { h: 'Ожидается', w: .15 }, { h: 'Что везёт', w: .28 }, { h: 'Кг', w: .14, align: 'right' }],
+    tl.map(t => [{ t: t.plate, b: true }, [...t.sup].join(', '), when(t.date), Object.entries(t.types).sort((a, b) => b[1] - a[1]).map(([k, v]) => k + ' ' + kgs(v)).join('\n'), { t: kgs(t.kg), b: true }]));
+  else note('Машин в пути нет.');
+  if ((arrived || []).length) note('Получено за вчера–сегодня: ' + new Set(arrived.map(d => d.plate_no || '?')).size + ' маш., ' + kgs(arrived.reduce((a, d) => a + Number(d.quantity || 0), 0)) + ' кг.');
+
+  if (shipments !== null) {
+    h2('Контейнеры и отправки (' + sl.length + ')');
+    if (sl.length) table([{ h: 'Номер', w: .18 }, { h: 'Что везём', w: .44 }, { h: 'Статус', w: .13 }, { h: 'Прибытие', w: .25 }],
+      sl.map(r => { const its = (items || []).filter(i => i.shipment_id === r.id);
+        return [{ t: (r.ref_no || '—') + '\n' + (KND[r.kind] || '') + ' ' + (r.container_type || ''), b: false },
+          (r.title || '') + (r.sender || r.origin ? '\n' + [r.sender, (r.origin || r.destination) ? (r.origin || '?') + ' → ' + (r.destination || '?') : ''].filter(Boolean).join(' · ') : '')
+            + (its.length ? '\n' + its.slice(0, 5).map(i => i.name + (i.qty != null ? ' ' + kgs(i.qty) + ' ' + (i.unit || '') : '')).join('; ') : ''),
+          { t: SHN[r.status] || r.status, b: true }, (() => { const w = when(tgt(r)); if (r.eta && r.eta_final && r.eta !== r.eta_final) w.t += '\nпорт ' + ruDate(r.eta); return w; })()]; }));
+    else note('Активных отправок нет.');
+    const evs = (events || []).filter(e => e.status || e.note);
+    if (evs.length) { h2('Изменения за сутки');
+      const byId = {}; sl.forEach(r => { byId[r.id] = r; });
+      evs.forEach(e => note('• ' + (byId[e.shipment_id]?.ref_no || ('#' + e.shipment_id)) + ': ' + (e.status ? (SHN[e.status] || e.status) + ' ' : '') + (e.note || '') + ' — ' + ruDate(e.at) + (e.user_name ? ' · ' + e.user_name : ''))); }
+  }
+
+  // номера страниц
+  const range = doc.bufferedPageRange();
+  for (let i = 0; i < range.count; i++) { doc.switchToPage(range.start + i);
+    doc.page.margins.bottom = 0;   // иначе текст в поле страницы создаёт новую страницу
+    doc.font('R').fontSize(7.5).fillColor('#8A938E').text('SoftStock · сводка ' + ruDate(today) + ' · стр. ' + (i + 1) + ' из ' + range.count, L, doc.page.height - 30, { width: W, align: 'center', lineBreak: false }); }
+  doc.end(); await done;
+  return Buffer.concat(chunks);
+}
+async function summaryAttachments() {
+  try { const buf = await buildSummaryPdf(); return [{ filename: 'SoftStock_svodka_' + localDate() + '.pdf', content: buf.toString('base64') }]; }
+  catch (e) { console.log('PDF не создан:', e.message); return []; }
+}
+
 // ── уведомление о смене статуса: контейнер (shipments) или фура (deliveries) ──
 const SH_ST = { ordered:'Заказано', production:'Производство', shipped:'В пути', port:'В порту', customs:'Таможня', delivered:'Доставлено', cancelled:'Отменено' };
 const SH_CAT = { finished:'Готовая продукция', equipment:'Оборудование / станки', parts:'Запчасти', other:'Прочее' };
@@ -424,9 +575,13 @@ exports.handler = async (event) => {
         alerts: alerts.html, alertsSubject: alerts.subject, newOut: alerts.newOut, newLow: alerts.newLow,
         configured: { resend: !!RESEND_KEY, to: summary.to } });
     }
+    if (mode === 'summary-pdf') {
+      const buf = await buildSummaryPdf();
+      return reply(200, { success: true, filename: 'SoftStock_svodka_' + localDate() + '.pdf', pdf: buf.toString('base64') });
+    }
     if (mode === 'summary') {
       const s = await buildSummary();
-      await sendMail(s.to, s.subject, s.html);
+      await sendMail(s.to, s.subject, s.html, await summaryAttachments());
       return reply(200, { success: true, sent: 'summary', to: s.to });
     }
     if (mode === 'alerts') {
@@ -449,7 +604,7 @@ exports.handler = async (event) => {
       const run = async (name, fn) => { try { if (await fn()) done.push(name); } catch (e) { errors.push(name + ': ' + e.message); } };
       if (settings.alerts_enabled !== 'false') await run('alerts', async () => (await runAlerts(true)).html);
       if (localHour() === SUMMARY_HOUR) {
-        if (settings.summary_enabled !== 'false') await run('summary', async () => { const s = await buildSummary(); await sendMail(s.to, s.subject, s.html); return true; });
+        if (settings.summary_enabled !== 'false') await run('summary', async () => { const s = await buildSummary(); await sendMail(s.to, s.subject, s.html, await summaryAttachments()); return true; });
         if (settings.logistics_enabled === 'true') await run('logistics', async () => { const l = await buildLogistics(); await sendMail(l.to, l.subject, l.html); return true; });
       }
       return reply(200, { success: errors.length === 0, sent: done, errors });
